@@ -1,0 +1,10 @@
+{
+  "pm25": 35.5,
+  "pm10": 52.1,
+  "co": 4.2,
+  "co2": 620,
+  "temperature": 30.2,
+  "humidity": 72,
+  "aqi": 78,
+  "air_quality_status": "Sedang"
+}
