@@ -7,7 +7,7 @@ import Header from '../components/Header';
 
 const API_URL =
     import.meta.env.VITE_API_URL ||
-    'http://https://aqm-umkt-dashboard-production.up.railway.app';
+    'https://aqm-umkt-dashboard-production.up.railway.app';
 
 const RiwayatData = () => {
 

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import Header from "../components/Header";
 
 const API_URL =
-  import.meta.env.VITE_API_URL || "http://https://aqm-umkt-dashboard-production.up.railway.app";
+  import.meta.env.VITE_API_URL || "https://aqm-umkt-dashboard-production.up.railway.app";
 
 const Pengaturan = () => {
 
