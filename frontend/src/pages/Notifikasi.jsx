@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import Header from '../components/Header';
 
 const SOCKET_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  import.meta.env.VITE_API_URL || 'http://https://aqm-umkt-dashboard-production.up.railway.app';
 
 const STORAGE_KEY = 'air_quality_notifications';
 

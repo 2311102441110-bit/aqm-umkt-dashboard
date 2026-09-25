@@ -18,7 +18,7 @@ import {
 
 const SOCKET_URL =
     import.meta.env.VITE_API_URL ||
-    'http://localhost:3001';
+    'http://https://aqm-umkt-dashboard-production.up.railway.app';
 
 
 // =====================================================
