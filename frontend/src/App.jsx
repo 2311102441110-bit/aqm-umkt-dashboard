@@ -1,11 +1,14 @@
+
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Monitoring from './pages/Monitoring';
 import RiwayatData from './pages/RiwayatData';
 import Notifikasi from './pages/Notifikasi';
 import Pengaturan from './pages/Pengaturan';
+import CloudServer from './pages/CloudServer';
 
 function App() {
   return (
@@ -17,6 +20,7 @@ function App() {
           <Route path="/riwayat" element={<RiwayatData />} />
           <Route path="/notifikasi" element={<Notifikasi />} />
           <Route path="/pengaturan" element={<Pengaturan />} />
+          <Route path="/cloud-server" element={<CloudServer />} />
         </Routes>
       </Layout>
     </Router>
