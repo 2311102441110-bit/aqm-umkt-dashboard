@@ -4,10 +4,7 @@ import React, {
 } from 'react';
 
 import Header from '../components/Header';
-
-const API_URL =
-    import.meta.env.VITE_API_URL ||
-    'https://aqm-umkt-dashboard-production.up.railway.app';
+import { supabase } from '../lib/supabase';
 
 const RiwayatData = () => {
 
@@ -15,11 +12,9 @@ const RiwayatData = () => {
     // STATE
     // =====================================================
 
-    const [history, setHistory] =
-        useState([]);
+    const [history, setHistory] = useState([]);
 
-    const [locations, setLocations] =
-        useState([]);
+    const [locations, setLocations] = useState([]);
 
     const [selectedLocation, setSelectedLocation] =
         useState('');
@@ -38,27 +33,26 @@ const RiwayatData = () => {
 
 
     // =====================================================
-    // AMBIL DAFTAR LOKASI PENGAMATAN
+    // AMBIL DAFTAR LOKASI DARI SUPABASE
     // =====================================================
 
     const fetchLocations = async () => {
 
         try {
 
-            const response =
-                await fetch(
-                    `${API_URL}/api/observation-locations`
-                );
+            const {
+                data,
+                error
+            } = await supabase
+                .from('observation_locations')
+                .select('*')
+                .order('id', {
+                    ascending: true
+                });
 
-            if (!response.ok) {
-
-                throw new Error(
-                    'Gagal mengambil daftar lokasi pengamatan'
-                );
+            if (error) {
+                throw error;
             }
-
-            const data =
-                await response.json();
 
             setLocations(
                 Array.isArray(data)
@@ -69,7 +63,7 @@ const RiwayatData = () => {
         } catch (err) {
 
             console.error(
-                'Error mengambil lokasi:',
+                'Error mengambil lokasi dari Supabase:',
                 err
             );
 
@@ -82,7 +76,7 @@ const RiwayatData = () => {
 
 
     // =====================================================
-    // AMBIL DATA RIWAYAT
+    // AMBIL DATA RIWAYAT DARI SUPABASE
     // =====================================================
 
     const fetchHistory = async () => {
@@ -92,84 +86,247 @@ const RiwayatData = () => {
 
         try {
 
-            const params =
-                new URLSearchParams();
+            let query = supabase
+                .from('sensor_data')
+                .select('*')
+                .order('timestamp', {
+                    ascending: false
+                })
+                .limit(limit);
 
-            params.append(
-                'limit',
-                limit
-            );
 
-
-            // -------------------------------------------------
+            // =================================================
             // FILTER LOKASI
-            // -------------------------------------------------
+            // =================================================
 
             if (selectedLocation) {
 
-                params.append(
+                query = query.eq(
                     'location',
                     selectedLocation
                 );
             }
 
 
-            // -------------------------------------------------
+            // =================================================
             // FILTER TANGGAL
-            // -------------------------------------------------
+            // =================================================
 
             if (selectedDate) {
 
-                params.append(
-                    'date',
-                    selectedDate
+                const startDate =
+                    `${selectedDate}T00:00:00`;
+
+                const nextDate =
+                    new Date(
+                        `${selectedDate}T00:00:00`
+                    );
+
+                nextDate.setDate(
+                    nextDate.getDate() + 1
                 );
+
+                const endDate =
+                    nextDate.toISOString();
+
+                query = query
+                    .gte(
+                        'timestamp',
+                        startDate
+                    )
+                    .lt(
+                        'timestamp',
+                        endDate
+                    );
             }
 
 
-            // -------------------------------------------------
-            // REQUEST DATA
-            // -------------------------------------------------
+            // =================================================
+            // JALANKAN QUERY
+            // =================================================
 
-            const response =
-                await fetch(
-                    `${API_URL}/api/data/history?${params.toString()}`
-                );
+            const {
+                data,
+                error
+            } = await query;
 
-            if (!response.ok) {
-
-                throw new Error(
-                    'Gagal mengambil riwayat data'
-                );
+            if (error) {
+                throw error;
             }
 
 
-            const data =
-                await response.json();
+            // =================================================
+            // SESUAIKAN DATA SUPABASE
+            // DENGAN FORMAT TABEL
+            // =================================================
+
+            const formattedData =
+                (
+                    Array.isArray(data)
+                        ? data
+                        : []
+                ).map((item) => ({
+
+                    ...item,
+
+                    observation_location_name:
+                        item.location,
+
+                    observation_location_code:
+                        item.location,
+
+                    name:
+                        item.device_id
+                }));
 
 
             setHistory(
-                Array.isArray(data)
-                    ? data
-                    : []
+                formattedData
             );
 
         } catch (err) {
 
             console.error(
-                'Error mengambil riwayat:',
+                'Error mengambil riwayat dari Supabase:',
                 err
             );
 
             setError(
                 err.message ||
-                'Gagal mengambil data'
+                'Gagal mengambil data riwayat dari Supabase'
             );
+
+            setHistory([]);
 
         } finally {
 
             setLoading(false);
         }
+    };
+
+
+    // =====================================================
+    // DOWNLOAD DATA CSV
+    // =====================================================
+
+    const downloadCSV = () => {
+
+        if (
+            !history ||
+            history.length === 0
+        ) {
+
+            alert(
+                'Tidak ada data untuk diunduh.'
+            );
+
+            return;
+        }
+
+
+        const headers = [
+            'No',
+            'Waktu',
+            'Lokasi',
+            'Perangkat',
+            'Gas (PPM)',
+            'ADC',
+            'Rs/Ro',
+            'Suhu (°C)',
+            'Kelembapan (%)',
+            'Status'
+        ];
+
+
+        const rows = history.map(
+            (item, index) => [
+
+                index + 1,
+
+                item.timestamp
+                    ? new Date(
+                        item.timestamp
+                    ).toLocaleString('id-ID')
+                    : '-',
+
+                item.location || '-',
+
+                item.device_id || '-',
+
+                item.gas ?? '-',
+
+                item.adc ?? '-',
+
+                item.rsro ?? '-',
+
+                item.temperature ?? '-',
+
+                item.humidity ?? '-',
+
+                item.air_quality_status || '-'
+            ]
+        );
+
+
+        const csvContent = [
+
+            headers,
+
+            ...rows
+
+        ]
+            .map((row) =>
+
+                row
+                    .map((value) =>
+
+                        `"${String(value)
+                            .replace(/"/g, '""')}"`
+                    )
+                    .join(',')
+            )
+            .join('\n');
+
+
+        // BOM agar CSV terbaca dengan baik
+        // oleh Microsoft Excel
+
+        const blob = new Blob(
+            [
+                '\ufeff',
+                csvContent
+            ],
+            {
+                type:
+                    'text/csv;charset=utf-8;'
+            }
+        );
+
+
+        const url =
+            URL.createObjectURL(blob);
+
+
+        const link =
+            document.createElement('a');
+
+
+        link.href = url;
+
+
+        link.download =
+            `riwayat-kualitas-udara-${new Date()
+                .toISOString()
+                .slice(0, 10)}.csv`;
+
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url);
     };
 
 
@@ -203,17 +360,16 @@ const RiwayatData = () => {
     // FORMAT WAKTU
     // =====================================================
 
-    const formatDateTime = (
-        value
-    ) => {
+    const formatDateTime = (value) => {
 
         if (!value) {
-
             return '--';
         }
 
+
         const date =
             new Date(value);
+
 
         if (
             Number.isNaN(
@@ -223,6 +379,7 @@ const RiwayatData = () => {
 
             return value;
         }
+
 
         return date.toLocaleString(
             'id-ID',
@@ -258,6 +415,7 @@ const RiwayatData = () => {
             return '--';
         }
 
+
         return Number(value).toFixed(
             digits
         );
@@ -282,17 +440,21 @@ const RiwayatData = () => {
 
                 return 'bg-green-100 text-green-700';
 
+
             case 'SEDANG':
 
                 return 'bg-yellow-100 text-yellow-700';
+
 
             case 'TIDAK SEHAT':
 
                 return 'bg-orange-100 text-orange-700';
 
+
             case 'BAHAYA':
 
                 return 'bg-red-100 text-red-700';
+
 
             default:
 
@@ -308,7 +470,9 @@ const RiwayatData = () => {
     const resetFilter = () => {
 
         setSelectedLocation('');
+
         setSelectedDate('');
+
         setLimit(100);
     };
 
@@ -336,17 +500,13 @@ const RiwayatData = () => {
                 <div className="mb-6">
 
                     <h3 className="text-lg font-bold text-gray-800">
-
                         Riwayat Data
-
                     </h3>
 
+
                     <p className="text-gray-500 mt-1">
-
-                        Melihat data hasil pengamatan
-                        kualitas udara yang telah
-                        tersimpan dalam database MySQL.
-
+                        Melihat data hasil pengamatan kualitas udara
+                        yang telah tersimpan dalam database Supabase.
                     </p>
 
                 </div>
@@ -368,15 +528,12 @@ const RiwayatData = () => {
                         <div>
 
                             <label className="block text-sm font-semibold text-gray-700 mb-2">
-
                                 Lokasi
-
                             </label>
 
+
                             <select
-                                value={
-                                    selectedLocation
-                                }
+                                value={selectedLocation}
                                 onChange={(e) =>
                                     setSelectedLocation(
                                         e.target.value
@@ -386,9 +543,7 @@ const RiwayatData = () => {
                             >
 
                                 <option value="">
-
                                     Semua Lokasi
-
                                 </option>
 
 
@@ -425,16 +580,13 @@ const RiwayatData = () => {
                         <div>
 
                             <label className="block text-sm font-semibold text-gray-700 mb-2">
-
                                 Tanggal
-
                             </label>
+
 
                             <input
                                 type="date"
-                                value={
-                                    selectedDate
-                                }
+                                value={selectedDate}
                                 onChange={(e) =>
                                     setSelectedDate(
                                         e.target.value
@@ -453,15 +605,12 @@ const RiwayatData = () => {
                         <div>
 
                             <label className="block text-sm font-semibold text-gray-700 mb-2">
-
                                 Jumlah Data
-
                             </label>
 
+
                             <select
-                                value={
-                                    limit
-                                }
+                                value={limit}
                                 onChange={(e) =>
                                     setLimit(
                                         Number(
@@ -494,20 +643,24 @@ const RiwayatData = () => {
 
 
                         {/* =================================================
-                            RESET
+                            TOMBOL
                         ================================================= */}
 
-                        <div className="flex items-end">
+                        <div className="flex items-end gap-2">
 
                             <button
-                                onClick={
-                                    resetFilter
-                                }
-                                className="w-full bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold rounded-lg px-4 py-2.5 text-sm"
+                                onClick={resetFilter}
+                                className="flex-1 bg-white border border-gray-200 hover:bg-gray-100 text-gray-700 font-semibold rounded-lg px-4 py-2.5 text-sm"
                             >
-
                                 Reset Filter
+                            </button>
 
+
+                            <button
+                                onClick={downloadCSV}
+                                className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm"
+                            >
+                                Download CSV
                             </button>
 
                         </div>
@@ -530,9 +683,7 @@ const RiwayatData = () => {
                             Total data:
 
                             <span className="font-bold text-gray-800 ml-1">
-
                                 {history.length}
-
                             </span>
 
                         </p>
@@ -541,14 +692,10 @@ const RiwayatData = () => {
 
 
                     <button
-                        onClick={
-                            fetchHistory
-                        }
+                        onClick={fetchHistory}
                         className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-semibold"
                     >
-
                         🔄 Refresh
-
                     </button>
 
                 </div>
@@ -584,63 +731,43 @@ const RiwayatData = () => {
                                 <tr>
 
                                     <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         No
-
                                     </th>
 
                                     <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Waktu
-
                                     </th>
 
                                     <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Lokasi
-
                                     </th>
 
                                     <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Perangkat
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Gas
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         ADC
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Rs/Ro
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Suhu
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Kelembapan
-
                                     </th>
 
                                     <th className="text-center px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
-
                                         Status
-
                                     </th>
 
                                 </tr>
@@ -658,9 +785,7 @@ const RiwayatData = () => {
                                             colSpan="10"
                                             className="text-center py-10 text-gray-400"
                                         >
-
                                             Memuat data riwayat...
-
                                         </td>
 
                                     </tr>
@@ -673,12 +798,8 @@ const RiwayatData = () => {
                                             colSpan="10"
                                             className="text-center py-10 text-gray-400"
                                         >
-
-                                            Belum ada data
-                                            riwayat yang
-                                            sesuai dengan
-                                            filter.
-
+                                            Belum ada data riwayat
+                                            yang sesuai dengan filter.
                                         </td>
 
                                     </tr>
@@ -692,55 +813,45 @@ const RiwayatData = () => {
                                         ) => (
 
                                             <tr
-                                                key={
-                                                    item.id
-                                                }
+                                                key={item.id}
                                                 className="border-b border-gray-50 hover:bg-gray-50"
                                             >
 
                                                 {/* NO */}
 
                                                 <td className="px-4 py-3 text-gray-500">
-
                                                     {index + 1}
-
                                                 </td>
 
 
                                                 {/* WAKTU */}
 
                                                 <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
-
                                                     {formatDateTime(
                                                         item.timestamp
                                                     )}
-
                                                 </td>
 
 
                                                 {/* LOKASI */}
 
                                                 <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
-
                                                     {
                                                         item.observation_location_name ||
-                                                        item.observation_location_code ||
+                                                        item.location ||
                                                         '--'
                                                     }
-
                                                 </td>
 
 
                                                 {/* PERANGKAT */}
 
                                                 <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
-
                                                     {
                                                         item.name ||
                                                         item.device_id ||
                                                         '--'
                                                     }
-
                                                 </td>
 
 
@@ -756,9 +867,7 @@ const RiwayatData = () => {
                                                     }
 
                                                     <span className="text-xs text-gray-400 ml-1">
-
                                                         PPM
-
                                                     </span>
 
                                                 </td>
@@ -804,9 +913,7 @@ const RiwayatData = () => {
                                                     }
 
                                                     <span className="text-xs text-gray-400 ml-1">
-
                                                         °C
-
                                                     </span>
 
                                                 </td>
@@ -824,9 +931,7 @@ const RiwayatData = () => {
                                                     }
 
                                                     <span className="text-xs text-gray-400 ml-1">
-
                                                         %
-
                                                     </span>
 
                                                 </td>
@@ -873,8 +978,8 @@ const RiwayatData = () => {
 
                 <div className="mt-4 text-xs text-gray-400">
 
-                    Data riwayat berasal dari database
-                    MySQL dan direkam setiap 1 menit
+                    Data riwayat berasal dari Supabase
+                    dan direkam setiap 1 menit
                     selama sesi pengamatan.
 
                 </div>

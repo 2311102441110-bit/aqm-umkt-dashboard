@@ -1,11 +1,8 @@
 import React, { useEffect, useState } from "react";
 import Header from "../components/Header";
-
-const API_URL =
-  import.meta.env.VITE_API_URL || "https://aqm-umkt-dashboard-production.up.railway.app";
+import { supabase } from "../lib/supabase";
 
 const Pengaturan = () => {
-
   // =====================================================
   // LOKASI PENGAMATAN
   // =====================================================
@@ -14,45 +11,42 @@ const Pengaturan = () => {
   const [activeLocation, setActiveLocation] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState("");
 
-  const [loadingLocation, setLoadingLocation] =
-    useState(true);
+  const [loadingLocation, setLoadingLocation] = useState(true);
+  const [savingLocation, setSavingLocation] = useState(false);
 
-  const [savingLocation, setSavingLocation] =
-    useState(false);
+  const [locationMessage, setLocationMessage] = useState("");
+  const [locationError, setLocationError] = useState("");
 
-  const [locationMessage, setLocationMessage] =
-    useState("");
+  // =====================================================
+  // SESI PENGAMBILAN DATA
+  // =====================================================
 
-  const [locationError, setLocationError] =
-    useState("");
-
+  const [sessionActive, setSessionActive] = useState(false);
+  const [sessionStartedAt, setSessionStartedAt] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionSaving, setSessionSaving] = useState(false);
+  const [sessionMessage, setSessionMessage] = useState("");
+  const [sessionError, setSessionError] = useState("");
 
   // =====================================================
   // AMBIL DAFTAR LOKASI
   // =====================================================
 
   const loadLocations = async () => {
-
     try {
+      const { data, error } = await supabase
+        .from("observation_locations")
+        .select("*")
+        .order("id", { ascending: true });
 
-      const response = await fetch(
-        `${API_URL}/api/observation-locations`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          "Gagal mengambil daftar lokasi."
-        );
+      if (error) {
+        throw error;
       }
 
-      const data = await response.json();
-
-      setLocations(data);
-
+      setLocations(Array.isArray(data) ? data : []);
     } catch (error) {
-
       console.error(
-        "Gagal mengambil lokasi:",
+        "Gagal mengambil lokasi dari Supabase:",
         error
       );
 
@@ -62,36 +56,30 @@ const Pengaturan = () => {
     }
   };
 
-
   // =====================================================
   // AMBIL LOKASI AKTIF
   // =====================================================
 
   const loadActiveLocation = async () => {
-
     try {
+      const { data, error } = await supabase
+        .from("observation_locations")
+        .select("*")
+        .eq("is_active", true)
+        .limit(1)
+        .single();
 
-      const response = await fetch(
-        `${API_URL}/api/observation-location`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          "Gagal mengambil lokasi aktif."
-        );
+      if (error) {
+        throw error;
       }
 
-      const data = await response.json();
-
-      setActiveLocation(data);
-      setSelectedLocation(
-        data.location_code
-      );
-
+      if (data) {
+        setActiveLocation(data);
+        setSelectedLocation(data.location_code);
+      }
     } catch (error) {
-
       console.error(
-        "Gagal mengambil lokasi aktif:",
+        "Gagal mengambil lokasi aktif dari Supabase:",
         error
       );
 
@@ -101,41 +89,74 @@ const Pengaturan = () => {
     }
   };
 
+  // =====================================================
+  // AMBIL STATUS SESI
+  // =====================================================
+
+  const loadSession = async () => {
+    try {
+      setSessionLoading(true);
+
+      const { data, error } = await supabase
+        .from("observation_session")
+        .select("*")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setSessionActive(data.is_active === true);
+        setSessionStartedAt(data.started_at || null);
+      } else {
+        setSessionActive(false);
+        setSessionStartedAt(null);
+      }
+    } catch (error) {
+      console.error(
+        "Gagal mengambil status sesi:",
+        error
+      );
+
+      setSessionError(
+        "Gagal mengambil status sesi pengambilan data."
+      );
+    } finally {
+      setSessionLoading(false);
+    }
+  };
 
   // =====================================================
-  // LOAD DATA
+  // LOAD SEMUA DATA
   // =====================================================
 
   useEffect(() => {
-
     const loadData = async () => {
-
       setLoadingLocation(true);
 
       await Promise.all([
         loadLocations(),
-        loadActiveLocation()
+        loadActiveLocation(),
+        loadSession(),
       ]);
 
       setLoadingLocation(false);
     };
 
     loadData();
-
   }, []);
-
 
   // =====================================================
   // SIMPAN LOKASI
   // =====================================================
 
   const saveLocation = async () => {
-
     if (!selectedLocation) {
       setLocationError(
         "Silakan pilih lokasi terlebih dahulu."
       );
-
       return;
     }
 
@@ -144,64 +165,176 @@ const Pengaturan = () => {
     setLocationError("");
 
     try {
+      // Nonaktifkan semua lokasi
+      const { error: resetError } = await supabase
+        .from("observation_locations")
+        .update({
+          is_active: false,
+        })
+        .neq("id", 0);
 
-      const response = await fetch(
-        `${API_URL}/api/observation-location`,
-        {
-          method: "PUT",
-
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
-
-          body: JSON.stringify({
-            location_code:
-              selectedLocation
-          })
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-
-        throw new Error(
-          data.error ||
-          "Gagal menyimpan lokasi."
-        );
+      if (resetError) {
+        throw resetError;
       }
 
-      setActiveLocation(
-        data.location
-      );
+      // Aktifkan lokasi pilihan
+      const { data, error } = await supabase
+        .from("observation_locations")
+        .update({
+          is_active: true,
+        })
+        .eq("location_code", selectedLocation)
+        .select()
+        .single();
 
-      setSelectedLocation(
-        data.location.location_code
-      );
+      if (error) {
+        throw error;
+      }
+
+      setActiveLocation(data);
+      setSelectedLocation(data.location_code);
 
       setLocationMessage(
         "Lokasi pengamatan berhasil disimpan."
       );
-
     } catch (error) {
-
       console.error(
-        "Gagal menyimpan lokasi:",
+        "Gagal menyimpan lokasi ke Supabase:",
         error
       );
 
       setLocationError(
         error.message ||
-        "Gagal menyimpan lokasi pengamatan."
+          "Gagal menyimpan lokasi pengamatan."
       );
-
     } finally {
-
       setSavingLocation(false);
     }
   };
 
+  // =====================================================
+  // MULAI PENGAMBILAN DATA
+  // =====================================================
+
+  const startSession = async () => {
+    if (!activeLocation) {
+      setSessionError(
+        "Silakan tentukan lokasi pengamatan terlebih dahulu."
+      );
+      return;
+    }
+
+    setSessionSaving(true);
+    setSessionMessage("");
+    setSessionError("");
+
+    try {
+      const startTime = new Date().toISOString();
+
+      const { error } = await supabase
+        .from("observation_session")
+        .upsert(
+          {
+            id: 1,
+            is_active: true,
+            started_at: startTime,
+            ended_at: null,
+            location_code:
+              activeLocation.location_code,
+            location_name:
+              activeLocation.location_name,
+          },
+          {
+            onConflict: "id",
+          }
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      setSessionActive(true);
+      setSessionStartedAt(startTime);
+
+      setSessionMessage(
+        "Pengambilan data berhasil dimulai. Data sensor akan direkam."
+      );
+    } catch (error) {
+      console.error(
+        "Gagal memulai sesi:",
+        error
+      );
+
+      setSessionError(
+        error.message ||
+          "Gagal memulai pengambilan data."
+      );
+    } finally {
+      setSessionSaving(false);
+    }
+  };
+
+  // =====================================================
+  // SELESAI PENGAMBILAN DATA
+  // =====================================================
+
+  const stopSession = async () => {
+    setSessionSaving(true);
+    setSessionMessage("");
+    setSessionError("");
+
+    try {
+      const endTime = new Date().toISOString();
+
+      const { error } = await supabase
+        .from("observation_session")
+        .update({
+          is_active: false,
+          ended_at: endTime,
+        })
+        .eq("id", 1);
+
+      if (error) {
+        throw error;
+      }
+
+      setSessionActive(false);
+
+      setSessionMessage(
+        "Pengambilan data selesai. Data sensor tidak lagi direkam."
+      );
+    } catch (error) {
+      console.error(
+        "Gagal menghentikan sesi:",
+        error
+      );
+
+      setSessionError(
+        error.message ||
+          "Gagal menghentikan pengambilan data."
+      );
+    } finally {
+      setSessionSaving(false);
+    }
+  };
+
+  // =====================================================
+  // FORMAT WAKTU SESI
+  // =====================================================
+
+  const formatSessionTime = (time) => {
+    if (!time) {
+      return "-";
+    }
+
+    return new Date(time).toLocaleString(
+      "id-ID",
+      {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }
+    );
+  };
 
   // =====================================================
   // RENDER
@@ -218,19 +351,203 @@ const Pengaturan = () => {
         ===================================================== */}
 
         <div>
-
           <h3 className="text-2xl font-bold text-gray-800">
             Pengaturan Sistem
           </h3>
 
           <p className="text-gray-500 mt-1">
-            Konfigurasi perangkat, lokasi pengamatan,
-            jadwal, notifikasi, dan koneksi sistem
-            monitoring kualitas udara.
+            Konfigurasi perangkat, sesi pengambilan data,
+            lokasi pengamatan, jadwal, notifikasi,
+            dan koneksi sistem monitoring kualitas udara.
           </p>
-
         </div>
 
+        {/* =====================================================
+            SESI PENGAMBILAN DATA
+        ===================================================== */}
+
+        <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
+
+          <div className="flex items-center gap-3 mb-5">
+
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                sessionActive
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+              {sessionActive ? "▶️" : "⏹️"}
+            </div>
+
+            <div>
+              <h4 className="text-lg font-bold text-gray-800">
+                Sesi Pengambilan Data
+              </h4>
+
+              <p className="text-sm text-gray-500">
+                Atur kapan data sensor mulai dan berhenti
+                direkam ke Supabase.
+              </p>
+            </div>
+
+          </div>
+
+          {/* STATUS */}
+
+          <div
+            className={`rounded-2xl border p-5 ${
+              sessionActive
+                ? "bg-green-50 border-green-200"
+                : "bg-red-50 border-red-200"
+            }`}
+          >
+
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+
+              <div>
+
+                <p
+                  className={`text-sm font-semibold ${
+                    sessionActive
+                      ? "text-green-700"
+                      : "text-red-700"
+                  }`}
+                >
+                  Status Pengambilan Data
+                </p>
+
+                <p
+                  className={`text-2xl font-bold mt-1 ${
+                    sessionActive
+                      ? "text-green-800"
+                      : "text-red-800"
+                  }`}
+                >
+                  {sessionLoading
+                    ? "Memuat..."
+                    : sessionActive
+                    ? "AKTIF"
+                    : "TIDAK AKTIF"}
+                </p>
+
+                <p className="text-sm text-gray-600 mt-2">
+                  {sessionActive
+                    ? "Data sensor sedang direkam ke Supabase."
+                    : "Sensor tetap dapat membaca data, tetapi data tidak direkam ke Supabase."}
+                </p>
+
+              </div>
+
+              {/* TOMBOL */}
+
+              <div>
+
+                {!sessionActive ? (
+                  <button
+                    onClick={startSession}
+                    disabled={
+                      sessionLoading ||
+                      sessionSaving ||
+                      !activeLocation
+                    }
+                    className={`px-6 py-3 rounded-xl font-bold text-white transition ${
+                      sessionLoading ||
+                      sessionSaving ||
+                      !activeLocation
+                        ? "bg-gray-400 cursor-not-allowed"
+                        : "bg-green-600 hover:bg-green-700"
+                    }`}
+                  >
+                    {sessionSaving
+                      ? "Memulai..."
+                      : "▶ Mulai Pengambilan Data"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={stopSession}
+                    disabled={sessionSaving}
+                    className={`px-6 py-3 rounded-xl font-bold text-white transition ${
+                      sessionSaving
+                        ? "bg-gray-400 cursor-not-allowed"
+                        : "bg-red-600 hover:bg-red-700"
+                    }`}
+                  >
+                    {sessionSaving
+                      ? "Menghentikan..."
+                      : "⏹ Selesai Pengambilan Data"}
+                  </button>
+                )}
+
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* DETAIL SESI */}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
+
+            <div className="border border-gray-200 rounded-xl p-4">
+
+              <p className="text-sm text-gray-500">
+                Lokasi
+              </p>
+
+              <p className="font-semibold text-gray-800 mt-1">
+                {activeLocation?.location_name ||
+                  "Belum ditentukan"}
+              </p>
+
+            </div>
+
+            <div className="border border-gray-200 rounded-xl p-4">
+
+              <p className="text-sm text-gray-500">
+                Kategori
+              </p>
+
+              <p className="font-semibold text-gray-800 mt-1">
+                {activeLocation?.category ||
+                  "-"}
+              </p>
+
+            </div>
+
+            <div className="border border-gray-200 rounded-xl p-4">
+
+              <p className="text-sm text-gray-500">
+                Mulai Sesi
+              </p>
+
+              <p className="font-semibold text-gray-800 mt-1">
+                {sessionActive
+                  ? formatSessionTime(
+                      sessionStartedAt
+                    )
+                  : "-"}
+              </p>
+
+            </div>
+
+          </div>
+
+          {/* PESAN */}
+
+          {sessionMessage && (
+            <div className="mt-4 p-4 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm">
+              ✅ {sessionMessage}
+            </div>
+          )}
+
+          {sessionError && (
+            <div className="mt-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+              ❌ {sessionError}
+            </div>
+          )}
+
+        </div>
 
         {/* =====================================================
             PERANGKAT
@@ -245,7 +562,6 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Pengaturan Perangkat
               </h4>
@@ -253,18 +569,15 @@ const Pengaturan = () => {
               <p className="text-sm text-gray-500">
                 Informasi perangkat monitoring yang digunakan.
               </p>
-
             </div>
 
           </div>
-
 
           <div className="border border-gray-200 rounded-xl p-5">
 
             <div className="flex items-center justify-between mb-4">
 
               <div>
-
                 <h5 className="font-bold text-gray-800">
                   AQM-01
                 </h5>
@@ -272,7 +585,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500 mt-1">
                   Air Quality Monitor
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
@@ -281,11 +593,9 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
 
               <div>
-
                 <p className="text-gray-500">
                   Device ID
                 </p>
@@ -293,12 +603,9 @@ const Pengaturan = () => {
                 <p className="font-medium text-gray-800">
                   esp32-kampus
                 </p>
-
               </div>
 
-
               <div>
-
                 <p className="text-gray-500">
                   Sensor
                 </p>
@@ -306,12 +613,9 @@ const Pengaturan = () => {
                 <p className="font-medium text-gray-800">
                   MQ-135 + DHT22
                 </p>
-
               </div>
 
-
               <div>
-
                 <p className="text-gray-500">
                   MQTT Topic
                 </p>
@@ -319,7 +623,6 @@ const Pengaturan = () => {
                 <p className="font-medium text-gray-800">
                   umkt/air/kampus
                 </p>
-
               </div>
 
             </div>
@@ -327,7 +630,6 @@ const Pengaturan = () => {
           </div>
 
         </div>
-
 
         {/* =====================================================
             LOKASI PENGAMATAN
@@ -342,7 +644,6 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Lokasi Pengamatan
               </h4>
@@ -350,13 +651,11 @@ const Pengaturan = () => {
               <p className="text-sm text-gray-500">
                 Pilih lokasi tempat AQM-01 sedang digunakan.
               </p>
-
             </div>
 
           </div>
 
-
-          {/* STATUS LOKASI AKTIF */}
+          {/* LOKASI AKTIF */}
 
           <div className="mb-5 p-4 rounded-xl bg-green-50 border border-green-200">
 
@@ -365,51 +664,39 @@ const Pengaturan = () => {
             </p>
 
             <p className="text-lg font-bold text-green-800 mt-1">
-
               {loadingLocation
                 ? "Memuat..."
                 : activeLocation?.location_name ||
                   "Belum ditentukan"}
-
             </p>
 
             {activeLocation && (
-
               <p className="text-sm text-green-700 mt-1">
-
-                Kategori:{" "}
-
-                {activeLocation.category}
-
+                Kategori: {activeLocation.category}
               </p>
-
             )}
 
           </div>
-
 
           {/* PILIH LOKASI */}
 
           <div>
 
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-
               Pilih lokasi pengamatan
-
             </label>
-
 
             <select
               value={selectedLocation}
               onChange={(e) => {
-                setSelectedLocation(
-                  e.target.value
-                );
-
+                setSelectedLocation(e.target.value);
                 setLocationMessage("");
                 setLocationError("");
               }}
-              disabled={loadingLocation || savingLocation}
+              disabled={
+                loadingLocation ||
+                savingLocation
+              }
               className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-green-500"
             >
 
@@ -418,22 +705,17 @@ const Pengaturan = () => {
               </option>
 
               {locations.map((location) => (
-
                 <option
                   key={location.location_code}
                   value={location.location_code}
                 >
-
                   {location.location_name}
-
                 </option>
-
               ))}
 
             </select>
 
           </div>
-
 
           {/* DAFTAR LOKASI */}
 
@@ -446,7 +728,6 @@ const Pengaturan = () => {
                 location.location_code;
 
               return (
-
                 <div
                   key={location.location_code}
                   className={`border rounded-xl p-4 ${
@@ -470,49 +751,33 @@ const Pengaturan = () => {
 
                     </div>
 
-
                     {isActive && (
-
                       <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
                         AKTIF
                       </span>
-
                     )}
 
                   </div>
 
                 </div>
-
               );
-
             })}
 
           </div>
 
-
-          {/* PESAN */}
+          {/* PESAN LOKASI */}
 
           {locationMessage && (
-
             <div className="mt-4 p-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm">
-
               ✅ {locationMessage}
-
             </div>
-
           )}
-
 
           {locationError && (
-
             <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
-
               ❌ {locationError}
-
             </div>
-
           )}
-
 
           {/* TOMBOL */}
 
@@ -533,17 +798,14 @@ const Pengaturan = () => {
                   : "bg-green-600 hover:bg-green-700"
               }`}
             >
-
               {savingLocation
                 ? "Menyimpan..."
                 : "Simpan Lokasi"}
-
             </button>
 
           </div>
 
         </div>
-
 
         {/* =====================================================
             JADWAL
@@ -558,7 +820,6 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Jadwal Pengamatan
               </h4>
@@ -566,18 +827,15 @@ const Pengaturan = () => {
               <p className="text-sm text-gray-500">
                 Jadwal pengambilan dan penyimpanan data penelitian.
               </p>
-
             </div>
 
           </div>
-
 
           <div className="space-y-3">
 
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Jam Sibuk Pagi
                 </p>
@@ -585,7 +843,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500">
                   07:00 – 08:00
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
@@ -594,11 +851,9 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Jam Normal Pagi
                 </p>
@@ -606,7 +861,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500">
                   10:00 – 11:00
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
@@ -615,11 +869,9 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Jam Normal Siang
                 </p>
@@ -627,7 +879,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500">
                   13:30 – 14:30
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
@@ -636,19 +887,16 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Jam Sibuk Sore
                 </p>
 
                 <p className="text-sm text-gray-500">
-                  16:00 – 17:00
+                  17:00 – 18:00
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
@@ -660,7 +908,6 @@ const Pengaturan = () => {
           </div>
 
         </div>
-
 
         {/* =====================================================
             NOTIFIKASI
@@ -675,7 +922,6 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Pengaturan Notifikasi
               </h4>
@@ -683,18 +929,15 @@ const Pengaturan = () => {
               <p className="text-sm text-gray-500">
                 Status layanan pemberitahuan sistem.
               </p>
-
             </div>
 
           </div>
-
 
           <div className="space-y-4">
 
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Notifikasi Dashboard
                 </p>
@@ -702,7 +945,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500">
                   Menampilkan laporan pengamatan pada halaman Notifikasi.
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
@@ -711,11 +953,9 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="flex items-center justify-between border border-gray-200 rounded-xl p-4">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
                   Telegram Bot
                 </p>
@@ -723,7 +963,6 @@ const Pengaturan = () => {
                 <p className="text-sm text-gray-500">
                   Mengirim laporan setelah sesi pengamatan selesai.
                 </p>
-
               </div>
 
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
@@ -735,7 +974,6 @@ const Pengaturan = () => {
           </div>
 
         </div>
-
 
         {/* =====================================================
             KONEKSI
@@ -750,7 +988,6 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Koneksi Sistem
               </h4>
@@ -758,11 +995,9 @@ const Pengaturan = () => {
               <p className="text-sm text-gray-500">
                 Informasi koneksi komunikasi dan penyimpanan data.
               </p>
-
             </div>
 
           </div>
-
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
@@ -782,11 +1017,10 @@ const Pengaturan = () => {
 
             </div>
 
-
             <div className="border border-gray-200 rounded-xl p-4">
 
               <p className="text-sm text-gray-500">
-                WebSocket
+                Real-Time
               </p>
 
               <p className="font-semibold text-gray-800 mt-1">
@@ -794,11 +1028,10 @@ const Pengaturan = () => {
               </p>
 
               <p className="text-xs text-gray-400 mt-1">
-                Real-Time Data
+                Supabase Realtime
               </p>
 
             </div>
-
 
             <div className="border border-gray-200 rounded-xl p-4">
 
@@ -807,11 +1040,11 @@ const Pengaturan = () => {
               </p>
 
               <p className="font-semibold text-gray-800 mt-1">
-                SQLite
+                Supabase
               </p>
 
               <p className="text-xs text-gray-400 mt-1">
-                Penyimpanan Lokal
+                Cloud Database
               </p>
 
             </div>
@@ -819,7 +1052,6 @@ const Pengaturan = () => {
           </div>
 
         </div>
-
 
         {/* =====================================================
             CLOUD
@@ -834,45 +1066,36 @@ const Pengaturan = () => {
             </div>
 
             <div>
-
               <h4 className="text-lg font-bold text-gray-800">
                 Penyimpanan Cloud
               </h4>
 
               <p className="text-sm text-gray-500">
-                Sinkronisasi data monitoring ke penyimpanan cloud.
+                Penyimpanan data monitoring pada cloud.
               </p>
-
             </div>
 
           </div>
 
-
-          <div className="border border-dashed border-gray-300 rounded-xl p-5 bg-gray-50">
+          <div className="border border-cyan-200 rounded-xl p-5 bg-cyan-50">
 
             <div className="flex items-center justify-between">
 
               <div>
-
                 <p className="font-semibold text-gray-800">
-                  Cloud Storage
+                  Supabase
                 </p>
 
                 <p className="text-sm text-gray-500 mt-1">
-                  Belum dikonfigurasi.
+                  Data monitoring tersimpan pada database Supabase.
                 </p>
-
               </div>
 
-              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-600">
-                OFFLINE
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">
+                TERHUBUNG
               </span>
 
             </div>
-
-            <p className="text-xs text-gray-400 mt-4">
-              Fitur cloud akan dikonfigurasi pada tahap berikutnya.
-            </p>
 
           </div>
 
