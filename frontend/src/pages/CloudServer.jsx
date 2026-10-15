@@ -1,10 +1,8 @@
 
 import React, { useEffect, useState } from 'react';
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  'http://localhost:3001';
-  
+const API_URL = import.meta.env.VITE_API_URL;
+
 const CloudServer = () => {
   const [cloudStatus, setCloudStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -95,8 +93,8 @@ const CloudServer = () => {
     },
     {
       key: 'database',
-      name: 'Database MySQL',
-      description: 'Penyimpanan data monitoring',
+      name: 'Database Supabase',
+      description: 'Penyimpanan data monitoring di Supabase',
       icon: '🗄️',
     },
     {
@@ -130,7 +128,7 @@ const CloudServer = () => {
           dengan dashboard web.
         </p>
         <p><strong>Platform:</strong> Railway</p>
-        <p><strong>Database:</strong> MySQL</p>
+        <p><strong>Database:</strong> Supabase</p>
         <p><strong>Protokol komunikasi:</strong> MQTT</p>
       </div>
 
