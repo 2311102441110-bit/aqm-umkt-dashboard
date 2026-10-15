@@ -34,7 +34,8 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - 
+
+      
       - name: Build frontend
         run: npm run build
         working-directory: frontend
@@ -43,9 +44,9 @@ jobs:
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_API_URL: https://aqm-umkt-dashboard-production.up.railway.app
 
-
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
