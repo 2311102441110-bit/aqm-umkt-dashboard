@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 
 const routes = require('./routes');
 const { initMqtt } = require('./mqtt');
-const { startDummyData } = require('./dummyData');
+
 
 const app = express();
 const server = http.createServer(app);
@@ -31,11 +31,6 @@ io.on('connection', (socket) => {
 
 // Initialize MQTT
 initMqtt(io);
-
-// Start dummy data if configured
-if (process.env.USE_DUMMY_DATA === 'true') {
-    startDummyData();
-}
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {

@@ -3,7 +3,8 @@ import { io } from "socket.io-client";
 import Header from "../components/Header";
 
 const SOCKET_URL =
-  import.meta.env.VITE_API_URL || "https://aqm-umkt-dashboard-production.up.railway.app";
+  import.meta.env.VITE_API_URL ||
+  "https://aqm-umkt-dashboard-production.up.railway.app";
 
 const socket = io(SOCKET_URL, {
   transports: ["websocket", "polling"],
@@ -14,8 +15,15 @@ const Monitoring = () => {
   const [mqttStatus, setMqttStatus] = useState("connecting");
   const [lastUpdate, setLastUpdate] = useState(null);
 
+  // =====================================================
+  // SOCKET.IO
+  // =====================================================
+
   useEffect(() => {
-    console.log("Monitoring: menghubungkan ke backend", SOCKET_URL);
+    console.log(
+      "Monitoring: menghubungkan ke backend",
+      SOCKET_URL
+    );
 
     const handleConnect = () => {
       console.log("Monitoring: Socket.IO terhubung");
@@ -82,13 +90,21 @@ const Monitoring = () => {
     };
   }, []);
 
-  const kampus = sensorData["esp32-kampus"];
-  const lembuswana = sensorData["esp32-lembuswana"];
+  // =====================================================
+  // DATA AQM-01
+  // =====================================================
+
+  const aqm01 = sensorData["esp32-kampus"];
+
+  // =====================================================
+  // HELPER
+  // =====================================================
 
   const formatNumber = (value, digits = 1) => {
     if (
       value === null ||
       value === undefined ||
+      value === "" ||
       Number.isNaN(Number(value))
     ) {
       return "--";
@@ -114,7 +130,7 @@ const Monitoring = () => {
   };
 
   const getStatusStyle = (status) => {
-    switch (status) {
+    switch (String(status || "").toUpperCase()) {
       case "BAIK":
         return "bg-green-100 text-green-700";
 
@@ -132,6 +148,10 @@ const Monitoring = () => {
     }
   };
 
+  // =====================================================
+  // SENSOR CARD
+  // =====================================================
+
   const SensorCard = ({
     title,
     location,
@@ -143,6 +163,7 @@ const Monitoring = () => {
 
     return (
       <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
+
         {/* HEADER */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
@@ -197,6 +218,7 @@ const Monitoring = () => {
 
         {/* DATA SENSOR */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+
           {/* GAS */}
           <div className="bg-gray-50 rounded-xl p-4">
             <p className="text-xs text-gray-500 mb-2">
@@ -242,6 +264,7 @@ const Monitoring = () => {
 
             <p className="text-2xl font-bold text-gray-800">
               {formatNumber(data?.temperature, 1)}
+
               {data?.temperature !== null &&
               data?.temperature !== undefined
                 ? " °C"
@@ -257,6 +280,7 @@ const Monitoring = () => {
 
             <p className="text-2xl font-bold text-gray-800">
               {formatNumber(data?.humidity, 1)}
+
               {data?.humidity !== null &&
               data?.humidity !== undefined
                 ? " %"
@@ -274,6 +298,7 @@ const Monitoring = () => {
               {status}
             </p>
           </div>
+
         </div>
 
         {/* UPDATE */}
@@ -284,9 +309,23 @@ const Monitoring = () => {
             {formatTime(data?.timestamp)}
           </span>
         </div>
+
       </div>
     );
   };
+
+  // =====================================================
+  // LOKASI AKTIF
+  // =====================================================
+
+  const activeLocation =
+    aqm01?.location ||
+    aqm01?.observation_location_name ||
+    "Belum ada lokasi";
+
+  // =====================================================
+  // RETURN
+  // =====================================================
 
   return (
     <>
@@ -298,84 +337,88 @@ const Monitoring = () => {
         }
       />
 
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm flex-1">
+      <div className="bg-gray-50 min-h-screen p-4 md:p-6">
+        <div className="max-w-7xl mx-auto">
 
-        {/* TITLE */}
-        <div className="mb-6">
-          <h3 className="text-lg font-bold text-gray-800">
-            Monitoring Detail
-          </h3>
+          {/* HEADER MONITORING */}
+          <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm">
 
-          <p className="text-gray-500 mt-1">
-            Pemantauan data sensor kualitas udara
-            secara real-time dari setiap lokasi.
-          </p>
-        </div>
+            {/* TITLE */}
+            <div className="mb-6">
+              <h3 className="text-lg font-bold text-gray-800">
+                Monitoring Detail
+              </h3>
 
-        {/* CONNECTION STATUS */}
-        <div className="mb-6 flex items-center justify-between bg-gray-50 rounded-xl px-5 py-4 border border-gray-100">
-          <div>
-            <p className="text-sm font-semibold text-gray-700">
-              Koneksi Sistem
-            </p>
-
-            <p className="text-xs text-gray-400 mt-1">
-              MQTT → Backend → Socket.IO → Monitoring
-            </p>
-          </div>
-
-          <div
-            className={`px-4 py-2 rounded-full text-sm font-bold ${
-              mqttStatus === "connected"
-                ? "bg-green-100 text-green-700"
-                : "bg-red-100 text-red-700"
-            }`}
-          >
-            ●{" "}
-            {mqttStatus === "connected"
-              ? "Terhubung"
-              : "Terputus"}
-          </div>
-        </div>
-
-        {/* SENSOR KAMPUS */}
-        <div className="mb-6">
-          <SensorCard
-            title="AQM Kampus"
-            location="Kampus UMKT"
-            device="esp32-kampus"
-            data={kampus}
-          />
-        </div>
-
-        {/* SENSOR LEMBUSWANA */}
-        <div className="mb-6">
-          <SensorCard
-            title="AQM Lembuswana"
-            location="Simpang 4 Lembuswana"
-            device="esp32-lembuswana"
-            data={lembuswana}
-          />
-        </div>
-
-        {/* INFORMASI UPDATE */}
-        <div className="bg-gray-50 rounded-xl border border-gray-100 px-5 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-gray-700">
-                Update Terakhir
-              </p>
-
-              <p className="text-xs text-gray-400 mt-1">
-                Data sensor terakhir yang diterima
-                oleh halaman monitoring
+              <p className="text-gray-500 mt-1">
+                Pemantauan data sensor kualitas udara
+                secara real-time dari perangkat AQM-01.
               </p>
             </div>
 
-            <p className="text-sm font-bold text-gray-700">
-              {formatTime(lastUpdate)}
-            </p>
+            {/* CONNECTION STATUS */}
+            <div className="mb-6 flex items-center justify-between bg-gray-50 rounded-xl px-5 py-4 border border-gray-100">
+
+              <div>
+                <p className="text-sm font-semibold text-gray-700">
+                  Koneksi Sistem
+                </p>
+
+                <p className="text-xs text-gray-400 mt-1">
+                  MQTT → Backend → Socket.IO → Monitoring
+                </p>
+              </div>
+
+              <div
+                className={`px-4 py-2 rounded-full text-sm font-bold ${
+                  mqttStatus === "connected"
+                    ? "bg-green-100 text-green-700"
+                    : "bg-red-100 text-red-700"
+                }`}
+              >
+                ●{" "}
+                {mqttStatus === "connected"
+                  ? "Terhubung"
+                  : "Terputus"}
+              </div>
+
+            </div>
+
+            {/* SENSOR AQM-01 */}
+            <div className="mb-6">
+              <SensorCard
+                title="AQM-01"
+                location={activeLocation}
+                device="esp32-kampus"
+                data={aqm01}
+              />
+            </div>
+
+            {/* INFORMASI UPDATE */}
+            <div className="bg-gray-50 rounded-xl border border-gray-100 px-5 py-4">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">
+                    Update Terakhir
+                  </p>
+
+                  <p className="text-xs text-gray-400 mt-1">
+                    Data sensor terakhir yang diterima
+                    oleh halaman monitoring
+                  </p>
+                </div>
+
+                <p className="text-sm font-bold text-gray-700">
+                  {formatTime(lastUpdate)}
+                </p>
+
+              </div>
+
+            </div>
+
           </div>
+
         </div>
       </div>
     </>

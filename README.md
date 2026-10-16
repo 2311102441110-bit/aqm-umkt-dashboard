@@ -41,9 +41,5 @@ npm run dev
 Akses dashboard di `http://localhost:3000`.
 
 ## Konfigurasi MQTT
-Broker MQTT default berjalan di `localhost:1883`.
-Topik MQTT:
-- `umkt/air/juanda`
-- `umkt/air/kampus`
+Backend berlangganan pada topik MQTT umkt/air/# untuk menerima data sensor dari perangkat IoT. Data yang diterima kemudian diproses oleh backend dan diteruskan ke dashboard web secara real-time.
 
-Contoh payload JSON yang dikirimkan ESP32 dapat dilihat pada file `mqtt_payload_example.json`.
