@@ -1,13 +1,17 @@
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+
+// =====================================================
+// HELPER
+// =====================================================
 
 const formatNumber = (value, digits = 1) => {
   if (
     value === null ||
     value === undefined ||
     value === "" ||
-    Number.isNaN(Number(value))
+    !Number.isFinite(Number(value))
   ) {
     return "--";
   }
@@ -52,6 +56,27 @@ const getStatusClass = (status) => {
   return "status-unknown";
 };
 
+const getNotificationClass = (status) => {
+  const value = String(status || "").toUpperCase();
+
+  if (value === "BAIK") return "notification-good";
+  if (value === "SEDANG") return "notification-warning";
+
+  if (
+    value.includes("TIDAK SEHAT") ||
+    value.includes("BAHAYA") ||
+    value.includes("BERBAHAYA")
+  ) {
+    return "notification-danger";
+  }
+
+  return "notification-neutral";
+};
+
+// =====================================================
+// ICON
+// =====================================================
+
 const Icon = ({ type, size = 24 }) => {
   const common = {
     width: size,
@@ -73,7 +98,15 @@ const Icon = ({ type, size = 24 }) => {
     );
   }
 
-  if (type === "temperature") {
+  if (type === "activity") {
+    return (
+      <svg {...common}>
+        <polyline points="3 12 7 12 9.5 5 14 19 16.5 12 21 12" />
+      </svg>
+    );
+  }
+
+  if (type === "thermometer") {
     return (
       <svg {...common}>
         <path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z" />
@@ -92,39 +125,58 @@ const Icon = ({ type, size = 24 }) => {
 
   return (
     <svg {...common}>
-      <polyline points="3 12 7 12 9.5 5 14 19 16.5 12 21 12" />
+      <circle cx="12" cy="12" r="9" />
     </svg>
   );
 };
 
+// =====================================================
+// DASHBOARD
+// =====================================================
+
 export default function Dashboard() {
   const [sensorData, setSensorData] = useState(null);
-  const [activeLocation, setActiveLocation] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [activeLocation, setActiveLocation] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [supabaseStatus, setSupabaseStatus] = useState("connecting");
+
+  const latestTimestampRef = useRef(0);
+  const requestInProgressRef = useRef(false);
+
   const [notifications, setNotifications] = useState(() => {
     try {
-      return JSON.parse(
-        localStorage.getItem("air_quality_notifications") || "[]"
-      );
-    } catch {
+      const saved = localStorage.getItem("air_quality_notifications");
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Gagal membaca notifikasi:", error);
       return [];
     }
   });
 
+  // =====================================================
+  // SIMPAN NOTIFIKASI
+  // =====================================================
+
   useEffect(() => {
-    localStorage.setItem(
-      "air_quality_notifications",
-      JSON.stringify(notifications)
-    );
+    try {
+      localStorage.setItem(
+        "air_quality_notifications",
+        JSON.stringify(notifications)
+      );
+    } catch (error) {
+      console.error("Gagal menyimpan notifikasi:", error);
+    }
   }, [notifications]);
 
-  // Ambil lokasi pengamatan aktif
+  // =====================================================
+  // LOKASI AKTIF
+  // =====================================================
+
   useEffect(() => {
     let mounted = true;
 
-    const loadLocation = async () => {
+    const loadActiveLocation = async () => {
       const { data, error } = await supabase
         .from("observation_locations")
         .select("*")
@@ -132,20 +184,20 @@ export default function Dashboard() {
         .limit(1)
         .maybeSingle();
 
+      if (!mounted) return;
+
       if (error) {
-        console.error("Gagal mengambil lokasi aktif:", error.message);
+        console.error("Gagal mengambil lokasi aktif:", error);
         return;
       }
 
-      if (mounted && data) {
-        setActiveLocation(data);
-      }
+      if (data) setActiveLocation(data);
     };
 
-    loadLocation();
+    loadActiveLocation();
 
-    const channel = supabase
-      .channel("dashboard-active-location")
+    const locationChannel = supabase
+      .channel("observation-location-dashboard")
       .on(
         "postgres_changes",
         {
@@ -153,49 +205,88 @@ export default function Dashboard() {
           schema: "public",
           table: "observation_locations",
         },
-        loadLocation
+        loadActiveLocation
       )
       .subscribe();
 
     return () => {
       mounted = false;
-      supabase.removeChannel(channel);
+      supabase.removeChannel(locationChannel);
     };
   }, []);
 
-  // Tangani pembacaan sensor terbaru
+  // =====================================================
+  // TERIMA DATA SENSOR
+  // =====================================================
+
   const handleSensorData = (data) => {
     if (!data) return;
 
-    const timestamp = data.timestamp || new Date().toISOString();
+    const timestamp = data.timestamp;
+    const incomingTime = timestamp
+      ? new Date(timestamp).getTime()
+      : NaN;
+
+    if (!Number.isFinite(incomingTime)) {
+      console.warn("Timestamp sensor tidak valid:", data);
+      return;
+    }
+
+    // Tolak data yang lebih lama atau duplikat.
+    if (incomingTime <= latestTimestampRef.current) {
+      console.log("Data lama/duplikat diabaikan:", timestamp);
+      return;
+    }
+
+    latestTimestampRef.current = incomingTime;
+
+    const deviceId =
+      data.device_id ||
+      data.deviceId ||
+      "esp32-kampus";
+
+    const location =
+      data.location ||
+      activeLocation?.location_name ||
+      "Belum ada lokasi";
+
+    const category =
+      data.category ||
+      data.observation_location_category ||
+      activeLocation?.category ||
+      "";
 
     const normalizedData = {
       ...data,
-      deviceId: data.device_id || "esp32-kampus",
-      deviceName: data.device_name || "AQM-01",
-      location:
-        data.location ||
-        activeLocation?.location_name ||
-        "Belum ada lokasi",
-      observation_location_name:
-        data.location ||
-        activeLocation?.location_name ||
-        "Belum ada lokasi",
-      observation_location_category:
-        data.category ||
-        activeLocation?.category ||
-        "",
+      device_id: deviceId,
+      deviceId,
+      deviceName:
+        data.device_name ||
+        data.deviceName ||
+        "AQM-01",
+      location,
+      observation_location_name: location,
+      observation_location_category: category,
       air_quality_status:
-        data.air_quality_status || "MENUNGGU DATA",
+        data.air_quality_status ||
+        "MENUNGGU DATA",
       timestamp,
     };
+
+    console.log("DATA SENSOR TERBARU:", normalizedData);
 
     setSensorData(normalizedData);
     setLastUpdate(timestamp);
     setSupabaseStatus("connected");
 
+    const point = {
+      time: formatTime(timestamp),
+      gas: Number(data.gas) || 0,
+      location,
+      timestamp,
+    };
+
     setChartData((previous) => {
-      // Hindari titik grafik ganda untuk timestamp yang sama
       if (
         previous.length > 0 &&
         previous[previous.length - 1].timestamp === timestamp
@@ -203,30 +294,21 @@ export default function Dashboard() {
         return previous;
       }
 
-      return [
-        ...previous,
-        {
-          timestamp,
-          time: formatTime(timestamp),
-          gas: Number(data.gas) || 0,
-        },
-      ].slice(-30);
+      return [...previous, point].slice(-30);
     });
   };
 
-  // PENTING: Dashboard menggunakan sensor_current,
-  // bukan sensor_data, agar tetap diperbarui di luar jadwal.
-    // =====================================================
-  // AMBIL DATA REAL-TIME DARI SENSOR_CURRENT
+  // =====================================================
+  // POLLING DAN SUPABASE REALTIME
   // =====================================================
 
   useEffect(() => {
     let mounted = true;
-    let loading = false;
 
     const loadLatestData = async () => {
-      if (loading) return;
-      loading = true;
+      if (requestInProgressRef.current) return;
+
+      requestInProgressRef.current = true;
 
       try {
         const { data, error } = await supabase
@@ -235,49 +317,35 @@ export default function Dashboard() {
           .eq("device_id", "esp32-kampus")
           .maybeSingle();
 
+        if (!mounted) return;
+
         if (error) {
           console.error(
-            "Gagal mengambil data real-time dari sensor_current:",
+            "Gagal mengambil sensor_current:",
             error
           );
-
-          if (mounted) {
-            setSupabaseStatus("disconnected");
-          }
-
+          setSupabaseStatus("disconnected");
           return;
         }
 
-        if (!mounted) return;
-
         setSupabaseStatus("connected");
 
-        if (data) {
-          handleSensorData(data);
-        }
+        if (data) handleSensorData(data);
       } catch (error) {
-        console.error(
-          "Kesalahan mengambil data sensor:",
-          error
-        );
+        console.error("Kesalahan mengambil data sensor:", error);
 
-        if (mounted) {
-          setSupabaseStatus("disconnected");
-        }
+        if (mounted) setSupabaseStatus("disconnected");
       } finally {
-        loading = false;
+        requestInProgressRef.current = false;
       }
     };
 
-    // Ambil data saat dashboard pertama kali dibuka.
     loadLatestData();
 
-    // Periksa data terbaru setiap 2 detik.
-    const polling = setInterval(() => {
-      loadLatestData();
-    }, 2000);
+    // Polling cadangan setiap dua detik.
+    const pollingId = setInterval(loadLatestData, 2000);
 
-    // Dengarkan perubahan pada sensor_current.
+    // Realtime sebagai jalur pembaruan langsung.
     const sensorChannel = supabase
       .channel("sensor-current-dashboard")
       .on(
@@ -289,29 +357,19 @@ export default function Dashboard() {
           filter: "device_id=eq.esp32-kampus",
         },
         (payload) => {
-          console.log(
-            "Data sensor real-time diperbarui:",
-            payload.new
-          );
-
           if (mounted && payload.new) {
             handleSensorData(payload.new);
           }
         }
       )
       .subscribe((status) => {
-        console.log(
-          "Status Supabase Realtime:",
-          status
-        );
-
         if (!mounted) return;
+
+        console.log("Status Supabase Realtime:", status);
 
         if (status === "SUBSCRIBED") {
           setSupabaseStatus("connected");
-        }
-
-        if (
+        } else if (
           status === "CHANNEL_ERROR" ||
           status === "TIMED_OUT" ||
           status === "CLOSED"
@@ -322,19 +380,27 @@ export default function Dashboard() {
 
     return () => {
       mounted = false;
-      clearInterval(polling);
+      clearInterval(pollingId);
       supabase.removeChannel(sensorChannel);
     };
   }, []);
 
-  const currentData = sensorData;
-  const currentStatus =
-    currentData?.air_quality_status || "MENUNGGU DATA";
+  // =====================================================
+  // DATA UNTUK TAMPILAN
+  // =====================================================
 
-  const deviceName = currentData?.deviceName || "AQM-01";
+  const currentData = sensorData;
+
+  const currentStatus =
+    currentData?.air_quality_status ||
+    "MENUNGGU DATA";
+
+  const deviceName =
+    currentData?.deviceName ||
+    "AQM-01";
 
   const locationName =
-    currentData?.location ||
+    currentData?.observation_location_name ||
     activeLocation?.location_name ||
     "Belum ada lokasi";
 
@@ -364,15 +430,23 @@ export default function Dashboard() {
     );
   };
 
-  const getY = (value) =>
-    chartHeight -
-    chartPadding -
-    ((Number(value) || 0) / chartMax) *
-      (chartHeight - chartPadding * 2);
+  const getY = (value) => {
+    const usableHeight = chartHeight - chartPadding * 2;
+
+    return (
+      chartHeight -
+      chartPadding -
+      ((Number(value) || 0) / chartMax) * usableHeight
+    );
+  };
 
   const polylinePoints = chartData
     .map((item, index) => `${getX(index)},${getY(item.gas)}`)
     .join(" ");
+
+  // =====================================================
+  // TAMPILAN
+  // =====================================================
 
   return (
     <div className="dashboard-page">
@@ -416,18 +490,25 @@ export default function Dashboard() {
         .connection-dot.offline { background: #ef4444; }
         .connection-text { font-size: 13px; font-weight: 700; }
 
-        .device-card, .panel, .metric-card {
+        .device-card, .panel {
           background: white;
           border: 1px solid #e5e7eb;
           border-radius: 16px;
+          padding: 22px;
           box-shadow: 0 4px 18px rgba(0,0,0,.04);
+          margin-bottom: 18px;
         }
 
-        .device-card { padding: 22px; margin-bottom: 18px; }
-        .device-header { display: flex; justify-content: space-between; gap: 15px; }
+        .device-header, .device-main, .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 15px;
+        }
+
         .device-title { font-size: 20px; font-weight: 700; }
-        .device-location { margin-top: 5px; color: #6b7280; font-size: 14px; }
-        .device-category { margin-top: 4px; color: #6b7280; font-size: 12px; }
+        .device-location, .device-category { margin-top: 5px; color: #6b7280; font-size: 14px; }
+        .device-category { font-size: 12px; }
 
         .location-status {
           display: inline-flex;
@@ -437,24 +518,16 @@ export default function Dashboard() {
           border-radius: 999px;
           font-size: 12px;
           font-weight: 700;
-          height: fit-content;
         }
 
-        .status-good { background: #ecfdf5; color: #166534; }
-        .status-moderate { background: #fffbeb; color: #92400e; }
+        .status-good, .notification-good { background: #ecfdf5; color: #166534; }
+        .status-moderate, .notification-warning { background: #fffbeb; color: #92400e; }
         .status-unhealthy { background: #fff7ed; color: #9a3412; }
-        .status-danger { background: #fef2f2; color: #991b1b; }
-        .status-unknown { background: #f3f4f6; color: #6b7280; }
+        .status-danger, .notification-danger { background: #fef2f2; color: #991b1b; }
+        .status-unknown, .notification-neutral { background: #f3f4f6; color: #6b7280; }
         .status-circle { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
-        .device-main {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-end;
-          margin-top: 24px;
-          gap: 20px;
-        }
-
+        .device-main { align-items: flex-end; margin-top: 24px; }
         .gas-value { font-size: 42px; font-weight: 800; line-height: 1; }
         .gas-label { margin-top: 8px; color: #6b7280; font-size: 13px; }
         .data-online { color: #16a34a; font-size: 13px; font-weight: 700; }
@@ -467,11 +540,24 @@ export default function Dashboard() {
           margin-bottom: 18px;
         }
 
-        .metric-card { padding: 17px; min-height: 145px; }
+        .metric-card {
+          background: white;
+          border: 1px solid #e5e7eb;
+          border-radius: 14px;
+          padding: 17px;
+          min-height: 145px;
+          box-shadow: 0 4px 18px rgba(0,0,0,.03);
+        }
+
         .metric-icon {
-          width: 40px; height: 40px;
-          display: flex; justify-content: center; align-items: center;
-          border-radius: 10px; background: #f3f4f6; color: #374151;
+          width: 40px;
+          height: 40px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          border-radius: 10px;
+          background: #f3f4f6;
+          color: #374151;
           margin-bottom: 13px;
         }
 
@@ -480,24 +566,36 @@ export default function Dashboard() {
         .metric-unit { font-size: 12px; color: #6b7280; margin-left: 3px; }
 
         .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
-        .panel { padding: 20px; }
-        .panel-header { display: flex; justify-content: space-between; margin-bottom: 18px; }
+        .panel { margin-bottom: 0; }
+        .panel-header { margin-bottom: 18px; }
         .panel-title { margin: 0; font-size: 17px; font-weight: 700; }
         .panel-subtitle { margin: 5px 0 0; color: #6b7280; font-size: 12px; }
+
         .chart-wrap { width: 100%; overflow-x: auto; }
-        .chart-empty { height: 260px; display: flex; justify-content: center; align-items: center; color: #9ca3af; font-size: 14px; }
+        .chart-empty {
+          height: 260px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          color: #9ca3af;
+          font-size: 14px;
+        }
 
         .info-list { display: flex; flex-direction: column; gap: 14px; }
         .info-row {
-          display: flex; justify-content: space-between; align-items: center;
-          gap: 15px; padding-bottom: 14px; border-bottom: 1px solid #f0f0f0;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 15px;
+          padding-bottom: 14px;
+          border-bottom: 1px solid #f0f0f0;
         }
+
         .info-row:last-child { padding-bottom: 0; border-bottom: none; }
         .info-label { color: #6b7280; font-size: 13px; }
         .info-value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
 
         .notification-panel { margin-top: 18px; }
-        .notification-empty { padding: 35px 20px; text-align: center; color: #9ca3af; font-size: 14px; }
         .notification-list { display: flex; flex-direction: column; gap: 12px; }
         .notification-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; background: white; }
         .notification-head { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 10px; }
@@ -510,18 +608,17 @@ export default function Dashboard() {
         .notification-data-label { display: block; font-size: 10px; color: #6b7280; margin-bottom: 3px; }
         .notification-data-value { font-size: 13px; font-weight: 700; color: #111827; }
         .notification-status { display: inline-flex; margin-top: 12px; padding: 6px 10px; border-radius: 7px; font-size: 11px; font-weight: 700; }
-        .notification-good { background: #ecfdf5; color: #166534; }
-        .notification-warning { background: #fffbeb; color: #92400e; }
-        .notification-danger { background: #fef2f2; color: #991b1b; }
-        .notification-neutral { background: #f3f4f6; color: #4b5563; }
+        .notification-empty { padding: 45px 20px; text-align: center; color: #9ca3af; font-size: 14px; }
 
         @media (max-width: 1200px) {
           .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
+
         @media (max-width: 900px) {
           .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .main-grid { grid-template-columns: 1fr; }
         }
+
         @media (max-width: 560px) {
           .dashboard-page { padding: 14px; }
           .metrics-grid { grid-template-columns: 1fr; }
@@ -532,7 +629,7 @@ export default function Dashboard() {
       `}</style>
 
       <div className="dashboard-container">
-        <header className="dashboard-header">
+        <div className="dashboard-header">
           <div>
             <h1 className="dashboard-title">
               Dashboard Monitoring Kualitas Udara
@@ -552,9 +649,9 @@ export default function Dashboard() {
               ☁️ Supabase: {supabaseConnected ? "Terhubung" : "Terputus"}
             </span>
           </div>
-        </header>
+        </div>
 
-        <section className="device-card">
+        <div className="device-card">
           <div className="device-header">
             <div>
               <div className="device-title">{deviceName}</div>
@@ -580,15 +677,17 @@ export default function Dashboard() {
               <div className="gas-label">NILAI GAS MQ-135 / ADC</div>
             </div>
 
-            {currentData ? (
-              <div className="data-online">● DATA MASUK</div>
-            ) : (
-              <div className="data-offline">● MENUNGGU DATA</div>
-            )}
+            <div>
+              {currentData ? (
+                <div className="data-online">● DATA MASUK</div>
+              ) : (
+                <div className="data-offline">● MENUNGGU DATA</div>
+              )}
+            </div>
           </div>
-        </section>
+        </div>
 
-        <section className="metrics-grid">
+        <div className="metrics-grid">
           <div className="metric-card">
             <div className="metric-icon"><Icon type="gas" size={21} /></div>
             <div className="metric-label">GAS MQ-135</div>
@@ -615,7 +714,7 @@ export default function Dashboard() {
           </div>
 
           <div className="metric-card">
-            <div className="metric-icon"><Icon type="temperature" size={21} /></div>
+            <div className="metric-icon"><Icon type="thermometer" size={21} /></div>
             <div className="metric-label">SUHU</div>
             <div className="metric-value">
               {formatNumber(currentData?.temperature, 1)}
@@ -637,9 +736,9 @@ export default function Dashboard() {
             <div className="metric-label">STATUS UDARA</div>
             <div className="metric-value">{currentStatus}</div>
           </div>
-        </section>
+        </div>
 
-        <section className="main-grid">
+        <div className="main-grid">
           <div className="panel">
             <div className="panel-header">
               <div>
@@ -657,9 +756,9 @@ export default function Dashboard() {
                   viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                   preserveAspectRatio="none"
                 >
-                  {[0, chartMax / 2, chartMax].map((value) => (
+                  {[0, chartMax / 2, chartMax].map((value, index) => (
                     <line
-                      key={value}
+                      key={index}
                       x1={chartPadding}
                       y1={getY(value)}
                       x2={chartWidth - chartPadding}
@@ -697,7 +796,7 @@ export default function Dashboard() {
 
                     return (
                       <text
-                        key={`time-${item.timestamp}`}
+                        key={`time-${index}`}
                         x={getX(index)}
                         y={chartHeight - 8}
                         textAnchor="middle"
@@ -722,25 +821,29 @@ export default function Dashboard() {
             </div>
 
             <div className="info-list">
-              <InfoRow label="Lokasi Aktif" value={locationName} />
-              <InfoRow label="Kategori" value={locationCategory || "--"} />
-              <InfoRow label="Perangkat" value={deviceName} />
-              <InfoRow label="Gas" value={`${formatNumber(currentData?.gas, 0)} PPM`} />
-              <InfoRow label="ADC" value={formatNumber(currentData?.adc, 0)} />
-              <InfoRow label="Rs/Ro" value={formatNumber(currentData?.rsro, 1)} />
-              <InfoRow label="Suhu" value={`${formatNumber(currentData?.temperature, 1)} °C`} />
-              <InfoRow label="Kelembapan" value={`${formatNumber(currentData?.humidity, 1)} %`} />
-              <InfoRow label="Status Udara" value={currentStatus} />
-              <InfoRow label="Update Terakhir" value={formatTime(lastUpdate)} />
-              <InfoRow
-                label="Supabase"
-                value={supabaseConnected ? "TERHUBUNG" : "TERPUTUS"}
-              />
+              {[
+                ["Lokasi Aktif", locationName],
+                ["Kategori", locationCategory || "--"],
+                ["Perangkat", deviceName],
+                ["Gas", `${formatNumber(currentData?.gas, 0)} PPM`],
+                ["ADC", formatNumber(currentData?.adc, 0)],
+                ["Rs/Ro", formatNumber(currentData?.rsro, 1)],
+                ["Suhu", `${formatNumber(currentData?.temperature, 1)} °C`],
+                ["Kelembapan", `${formatNumber(currentData?.humidity, 1)} %`],
+                ["Status Udara", currentStatus],
+                ["Update Terakhir", formatTime(lastUpdate)],
+                ["Supabase", supabaseConnected ? "TERHUBUNG" : "TERPUTUS"],
+              ].map(([label, value]) => (
+                <div className="info-row" key={label}>
+                  <div className="info-label">{label}</div>
+                  <div className="info-value">{value}</div>
+                </div>
+              ))}
             </div>
           </div>
-        </section>
+        </div>
 
-        <section className="panel notification-panel">
+        <div className="panel notification-panel">
           <div className="panel-header">
             <div>
               <h2 className="panel-title">Notifikasi &amp; Peringatan</h2>
@@ -754,17 +857,14 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="notification-list">
-              {notifications.map((item, index) => {
+              {notifications.map((item) => {
                 const status =
                   item.air_quality_status ||
                   item.status ||
                   "MENUNGGU DATA";
 
                 return (
-                  <div
-                    className="notification-item"
-                    key={item.id || `${item.timestamp}-${index}`}
-                  >
+                  <div className="notification-item" key={item.id}>
                     <div className="notification-head">
                       <div>
                         <div className="notification-title">
@@ -782,29 +882,38 @@ export default function Dashboard() {
                     </div>
 
                     <div className="notification-message">
-                      <div>📍 <strong>Lokasi:</strong> {item.location || "Tidak diketahui"}</div>
-                      <div>🖥️ <strong>Perangkat:</strong> {item.device_name || item.deviceName || "AQM-01"}</div>
+                      <div>
+                        📍 <strong>Lokasi:</strong>{" "}
+                        {item.location || "Tidak diketahui"}
+                      </div>
+
+                      <div>
+                        🖥️ <strong>Perangkat:</strong>{" "}
+                        {item.device_name || item.deviceName || "AQM-01"}
+                      </div>
 
                       <div className="notification-grid">
-                        <NotificationValue label="GAS" value={`${item.gas ?? "--"} PPM`} />
-                        <NotificationValue label="ADC" value={item.adc ?? "--"} />
-                        <NotificationValue label="RS / RO" value={item.rsro ?? "--"} />
-                        <NotificationValue label="SUHU" value={`${item.temperature ?? "--"} °C`} />
-                        <NotificationValue label="KELEMBAPAN" value={`${item.humidity ?? "--"} %`} />
-                        <NotificationValue label="STATUS" value={status} />
+                        {[
+                          ["GAS", `${item.gas ?? "--"} PPM`],
+                          ["ADC", item.adc ?? "--"],
+                          ["RS / RO", item.rsro ?? "--"],
+                          ["SUHU", `${item.temperature ?? "--"} °C`],
+                          ["KELEMBAPAN", `${item.humidity ?? "--"} %`],
+                          ["STATUS", status],
+                        ].map(([label, value]) => (
+                          <div className="notification-data" key={label}>
+                            <span className="notification-data-label">
+                              {label}
+                            </span>
+                            <span className="notification-data-value">
+                              {value}
+                            </span>
+                          </div>
+                        ))}
                       </div>
 
                       <span
-                        className={`notification-status ${
-                          status === "BAIK"
-                            ? "notification-good"
-                            : status === "SEDANG"
-                              ? "notification-warning"
-                              : status.includes("BAHAYA") ||
-                                  status.includes("TIDAK SEHAT")
-                                ? "notification-danger"
-                                : "notification-neutral"
-                        }`}
+                        className={`notification-status ${getNotificationClass(status)}`}
                       >
                         ● Status Udara: {status}
                       </span>
@@ -814,26 +923,8 @@ export default function Dashboard() {
               })}
             </div>
           )}
-        </section>
+        </div>
       </div>
-    </div>
-  );
-}
-
-function InfoRow({ label, value }) {
-  return (
-    <div className="info-row">
-      <div className="info-label">{label}</div>
-      <div className="info-value">{value}</div>
-    </div>
-  );
-}
-
-function NotificationValue({ label, value }) {
-  return (
-    <div className="notification-data">
-      <span className="notification-data-label">{label}</span>
-      <span className="notification-data-value">{value}</span>
     </div>
   );
 }
