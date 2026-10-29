@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -23,7 +22,6 @@ const formatTime = (value) => {
   if (!value) return "--:--:--";
 
   const date = new Date(value);
-
   if (Number.isNaN(date.getTime())) return "--:--:--";
 
   return date.toLocaleTimeString("id-ID", {
@@ -38,14 +36,12 @@ const getStatusClass = (status) => {
 
   if (value === "BAIK") return "status-good";
   if (value === "SEDANG") return "status-moderate";
-
   if (
     value.includes("TIDAK SEHAT") ||
     value.includes("KURANG BAIK")
   ) {
     return "status-unhealthy";
   }
-
   if (
     value.includes("BAHAYA") ||
     value.includes("BERBAHAYA")
@@ -61,7 +57,6 @@ const getNotificationClass = (status) => {
 
   if (value === "BAIK") return "notification-good";
   if (value === "SEDANG") return "notification-warning";
-
   if (
     value.includes("TIDAK SEHAT") ||
     value.includes("BAHAYA") ||
@@ -141,8 +136,14 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState([]);
   const [supabaseStatus, setSupabaseStatus] = useState("connecting");
 
+  // Timestamp terbaru yang sudah diterima.
   const latestTimestampRef = useRef(0);
+
+  // Mencegah permintaan polling berjalan bersamaan.
   const requestInProgressRef = useRef(false);
+
+  // Menjaga komponen tetap aktif selama halaman terpasang.
+  const mountedRef = useRef(false);
 
   const [notifications, setNotifications] = useState(() => {
     try {
@@ -216,7 +217,7 @@ export default function Dashboard() {
   }, []);
 
   // =====================================================
-  // TERIMA DATA SENSOR
+  // TERIMA DAN NORMALISASI DATA SENSOR
   // =====================================================
 
   const handleSensorData = (data) => {
@@ -232,13 +233,24 @@ export default function Dashboard() {
       return;
     }
 
-    // Tolak data yang lebih lama atau duplikat.
-    if (incomingTime <= latestTimestampRef.current) {
-      console.log("Data lama/duplikat diabaikan:", timestamp);
+    /*
+     * Perbaikan:
+     * - Tolak data yang benar-benar lebih lama.
+     * - Timestamp yang sama tidak langsung ditolak.
+     * - Polling dan Realtime boleh menerima baris yang sama.
+     *
+     * Dengan demikian, event duplikat tidak dianggap sebagai data
+     * baru untuk grafik, tetapi juga tidak membuat timestamp yang
+     * sama menghentikan pembaruan state.
+     */
+    if (incomingTime < latestTimestampRef.current) {
+      console.log("Data lebih lama diabaikan:", timestamp);
       return;
     }
 
-    latestTimestampRef.current = incomingTime;
+    if (incomingTime > latestTimestampRef.current) {
+      latestTimestampRef.current = incomingTime;
+    }
 
     const deviceId =
       data.device_id ||
@@ -247,6 +259,7 @@ export default function Dashboard() {
 
     const location =
       data.location ||
+      data.observation_location_name ||
       activeLocation?.location_name ||
       "Belum ada lokasi";
 
@@ -269,6 +282,7 @@ export default function Dashboard() {
       observation_location_category: category,
       air_quality_status:
         data.air_quality_status ||
+        data.status ||
         "MENUNGGU DATA",
       timestamp,
     };
@@ -279,6 +293,7 @@ export default function Dashboard() {
     setLastUpdate(timestamp);
     setSupabaseStatus("connected");
 
+    // Tambahkan titik grafik hanya jika timestamp belum ada.
     const point = {
       time: formatTime(timestamp),
       gas: Number(data.gas) || 0,
@@ -287,14 +302,19 @@ export default function Dashboard() {
     };
 
     setChartData((previous) => {
-      if (
-        previous.length > 0 &&
-        previous[previous.length - 1].timestamp === timestamp
-      ) {
-        return previous;
-      }
+      const alreadyExists = previous.some(
+        (item) => item.timestamp === timestamp
+      );
 
-      return [...previous, point].slice(-30);
+      if (alreadyExists) return previous;
+
+      return [...previous, point]
+        .sort(
+          (a, b) =>
+            new Date(a.timestamp).getTime() -
+            new Date(b.timestamp).getTime()
+        )
+        .slice(-30);
     });
   };
 
@@ -304,9 +324,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     let mounted = true;
+    mountedRef.current = true;
 
     const loadLatestData = async () => {
-      if (requestInProgressRef.current) return;
+      if (!mounted || requestInProgressRef.current) return;
 
       requestInProgressRef.current = true;
 
@@ -321,7 +342,7 @@ export default function Dashboard() {
 
         if (error) {
           console.error(
-            "Gagal mengambil sensor_current:",
+            "Gagal mengambil data real-time dari sensor_current:",
             error
           );
           setSupabaseStatus("disconnected");
@@ -330,22 +351,27 @@ export default function Dashboard() {
 
         setSupabaseStatus("connected");
 
-        if (data) handleSensorData(data);
+        if (data) {
+          handleSensorData(data);
+        }
       } catch (error) {
         console.error("Kesalahan mengambil data sensor:", error);
 
-        if (mounted) setSupabaseStatus("disconnected");
+        if (mounted) {
+          setSupabaseStatus("disconnected");
+        }
       } finally {
         requestInProgressRef.current = false;
       }
     };
 
+    // Ambil data terbaru saat dashboard dibuka.
     loadLatestData();
 
-    // Polling cadangan setiap dua detik.
+    // Polling cadangan setiap 2 detik.
     const pollingId = setInterval(loadLatestData, 2000);
 
-    // Realtime sebagai jalur pembaruan langsung.
+    // Supabase Realtime.
     const sensorChannel = supabase
       .channel("sensor-current-dashboard")
       .on(
@@ -357,9 +383,14 @@ export default function Dashboard() {
           filter: "device_id=eq.esp32-kampus",
         },
         (payload) => {
-          if (mounted && payload.new) {
-            handleSensorData(payload.new);
-          }
+          if (!mounted || !payload.new) return;
+
+          console.log(
+            "Data sensor Realtime diterima:",
+            payload.new
+          );
+
+          handleSensorData(payload.new);
         }
       )
       .subscribe((status) => {
@@ -380,6 +411,7 @@ export default function Dashboard() {
 
     return () => {
       mounted = false;
+      mountedRef.current = false;
       clearInterval(pollingId);
       supabase.removeChannel(sensorChannel);
     };
@@ -410,6 +442,10 @@ export default function Dashboard() {
     "";
 
   const supabaseConnected = supabaseStatus === "connected";
+
+  // =====================================================
+  // GRAFIK
+  // =====================================================
 
   const chartWidth = 800;
   const chartHeight = 260;
@@ -461,7 +497,10 @@ export default function Dashboard() {
           font-family: Arial, Helvetica, sans-serif;
         }
 
-        .dashboard-container { max-width: 1400px; margin: 0 auto; }
+        .dashboard-container {
+          max-width: 1400px;
+          margin: 0 auto;
+        }
 
         .dashboard-header {
           display: flex;
@@ -472,8 +511,17 @@ export default function Dashboard() {
           flex-wrap: wrap;
         }
 
-        .dashboard-title { margin: 0; font-size: 28px; font-weight: 700; }
-        .dashboard-subtitle { margin: 6px 0 0; color: #6b7280; font-size: 14px; }
+        .dashboard-title {
+          margin: 0;
+          font-size: 28px;
+          font-weight: 700;
+        }
+
+        .dashboard-subtitle {
+          margin: 6px 0 0;
+          color: #6b7280;
+          font-size: 14px;
+        }
 
         .connection-box {
           display: flex;
@@ -485,7 +533,13 @@ export default function Dashboard() {
           border: 1px solid #d1d5db;
         }
 
-        .connection-dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; }
+        .connection-dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #9ca3af;
+        }
+
         .connection-dot.online { background: #22c55e; }
         .connection-dot.offline { background: #ef4444; }
         .connection-text { font-size: 13px; font-weight: 700; }
@@ -507,7 +561,11 @@ export default function Dashboard() {
         }
 
         .device-title { font-size: 20px; font-weight: 700; }
-        .device-location, .device-category { margin-top: 5px; color: #6b7280; font-size: 14px; }
+        .device-location, .device-category {
+          margin-top: 5px;
+          color: #6b7280;
+          font-size: 14px;
+        }
         .device-category { font-size: 12px; }
 
         .location-status {
@@ -520,18 +578,66 @@ export default function Dashboard() {
           font-weight: 700;
         }
 
-        .status-good, .notification-good { background: #ecfdf5; color: #166534; }
-        .status-moderate, .notification-warning { background: #fffbeb; color: #92400e; }
-        .status-unhealthy { background: #fff7ed; color: #9a3412; }
-        .status-danger, .notification-danger { background: #fef2f2; color: #991b1b; }
-        .status-unknown, .notification-neutral { background: #f3f4f6; color: #6b7280; }
-        .status-circle { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+        .status-good, .notification-good {
+          background: #ecfdf5;
+          color: #166534;
+        }
 
-        .device-main { align-items: flex-end; margin-top: 24px; }
-        .gas-value { font-size: 42px; font-weight: 800; line-height: 1; }
-        .gas-label { margin-top: 8px; color: #6b7280; font-size: 13px; }
-        .data-online { color: #16a34a; font-size: 13px; font-weight: 700; }
-        .data-offline { color: #6b7280; font-size: 13px; font-weight: 700; }
+        .status-moderate, .notification-warning {
+          background: #fffbeb;
+          color: #92400e;
+        }
+
+        .status-unhealthy {
+          background: #fff7ed;
+          color: #9a3412;
+        }
+
+        .status-danger, .notification-danger {
+          background: #fef2f2;
+          color: #991b1b;
+        }
+
+        .status-unknown, .notification-neutral {
+          background: #f3f4f6;
+          color: #6b7280;
+        }
+
+        .status-circle {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: currentColor;
+        }
+
+        .device-main {
+          align-items: flex-end;
+          margin-top: 24px;
+        }
+
+        .gas-value {
+          font-size: 42px;
+          font-weight: 800;
+          line-height: 1;
+        }
+
+        .gas-label {
+          margin-top: 8px;
+          color: #6b7280;
+          font-size: 13px;
+        }
+
+        .data-online {
+          color: #16a34a;
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .data-offline {
+          color: #6b7280;
+          font-size: 13px;
+          font-weight: 700;
+        }
 
         .metrics-grid {
           display: grid;
@@ -561,17 +667,37 @@ export default function Dashboard() {
           margin-bottom: 13px;
         }
 
-        .metric-label { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
-        .metric-value { font-size: 23px; font-weight: 750; overflow-wrap: anywhere; }
-        .metric-unit { font-size: 12px; color: #6b7280; margin-left: 3px; }
+        .metric-label {
+          font-size: 12px;
+          color: #6b7280;
+          margin-bottom: 6px;
+        }
 
-        .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+        .metric-value {
+          font-size: 23px;
+          font-weight: 750;
+          overflow-wrap: anywhere;
+        }
+
+        .metric-unit {
+          font-size: 12px;
+          color: #6b7280;
+          margin-left: 3px;
+        }
+
+        .main-grid {
+          display: grid;
+          grid-template-columns: 2fr 1fr;
+          gap: 18px;
+        }
+
         .panel { margin-bottom: 0; }
         .panel-header { margin-bottom: 18px; }
         .panel-title { margin: 0; font-size: 17px; font-weight: 700; }
         .panel-subtitle { margin: 5px 0 0; color: #6b7280; font-size: 12px; }
 
         .chart-wrap { width: 100%; overflow-x: auto; }
+
         .chart-empty {
           height: 260px;
           display: flex;
@@ -581,7 +707,12 @@ export default function Dashboard() {
           font-size: 14px;
         }
 
-        .info-list { display: flex; flex-direction: column; gap: 14px; }
+        .info-list {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+
         .info-row {
           display: flex;
           justify-content: space-between;
@@ -591,24 +722,86 @@ export default function Dashboard() {
           border-bottom: 1px solid #f0f0f0;
         }
 
-        .info-row:last-child { padding-bottom: 0; border-bottom: none; }
+        .info-row:last-child {
+          padding-bottom: 0;
+          border-bottom: none;
+        }
+
         .info-label { color: #6b7280; font-size: 13px; }
-        .info-value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+        .info-value {
+          font-weight: 700;
+          text-align: right;
+          overflow-wrap: anywhere;
+        }
 
         .notification-panel { margin-top: 18px; }
-        .notification-list { display: flex; flex-direction: column; gap: 12px; }
-        .notification-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; background: white; }
-        .notification-head { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 10px; }
+
+        .notification-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .notification-item {
+          padding: 16px;
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          background: white;
+        }
+
+        .notification-head {
+          display: flex;
+          justify-content: space-between;
+          gap: 15px;
+          margin-bottom: 10px;
+        }
+
         .notification-title { font-size: 15px; font-weight: 700; }
         .notification-time { font-size: 11px; color: #6b7280; white-space: nowrap; }
         .notification-session { margin-top: 3px; font-size: 12px; color: #6b7280; }
         .notification-message { font-size: 13px; color: #4b5563; line-height: 1.7; }
-        .notification-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-        .notification-data { padding: 9px; background: #f8fafc; border-radius: 8px; }
-        .notification-data-label { display: block; font-size: 10px; color: #6b7280; margin-bottom: 3px; }
-        .notification-data-value { font-size: 13px; font-weight: 700; color: #111827; }
-        .notification-status { display: inline-flex; margin-top: 12px; padding: 6px 10px; border-radius: 7px; font-size: 11px; font-weight: 700; }
-        .notification-empty { padding: 45px 20px; text-align: center; color: #9ca3af; font-size: 14px; }
+
+        .notification-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        .notification-data {
+          padding: 9px;
+          background: #f8fafc;
+          border-radius: 8px;
+        }
+
+        .notification-data-label {
+          display: block;
+          font-size: 10px;
+          color: #6b7280;
+          margin-bottom: 3px;
+        }
+
+        .notification-data-value {
+          font-size: 13px;
+          font-weight: 700;
+          color: #111827;
+        }
+
+        .notification-status {
+          display: inline-flex;
+          margin-top: 12px;
+          padding: 6px 10px;
+          border-radius: 7px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .notification-empty {
+          padding: 45px 20px;
+          text-align: center;
+          color: #9ca3af;
+          font-size: 14px;
+        }
 
         @media (max-width: 1200px) {
           .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
