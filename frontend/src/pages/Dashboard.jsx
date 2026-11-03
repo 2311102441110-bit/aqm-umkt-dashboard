@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { io } from "socket.io-client";
 
 // =====================================================
 // HELPER
@@ -36,12 +37,14 @@ const getStatusClass = (status) => {
 
   if (value === "BAIK") return "status-good";
   if (value === "SEDANG") return "status-moderate";
+
   if (
     value.includes("TIDAK SEHAT") ||
     value.includes("KURANG BAIK")
   ) {
     return "status-unhealthy";
   }
+
   if (
     value.includes("BAHAYA") ||
     value.includes("BERBAHAYA")
@@ -57,6 +60,7 @@ const getNotificationClass = (status) => {
 
   if (value === "BAIK") return "notification-good";
   if (value === "SEDANG") return "notification-warning";
+
   if (
     value.includes("TIDAK SEHAT") ||
     value.includes("BAHAYA") ||
@@ -135,15 +139,12 @@ export default function Dashboard() {
   const [activeLocation, setActiveLocation] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [supabaseStatus, setSupabaseStatus] = useState("connecting");
+  const [socketStatus, setSocketStatus] = useState("connecting");
 
-  // Timestamp terbaru yang sudah diterima.
   const latestTimestampRef = useRef(0);
-
-  // Mencegah permintaan polling berjalan bersamaan.
   const requestInProgressRef = useRef(false);
-
-  // Menjaga komponen tetap aktif selama halaman terpasang.
   const mountedRef = useRef(false);
+  const lastPayloadSignatureRef = useRef(null);
 
   const [notifications, setNotifications] = useState(() => {
     try {
@@ -224,59 +225,55 @@ export default function Dashboard() {
     if (!data) return;
 
     const timestamp = data.timestamp;
-    const incomingTime = timestamp
-      ? new Date(timestamp).getTime()
-      : NaN;
+    const incomingTime = timestamp ? Date.parse(timestamp) : NaN;
 
     if (!Number.isFinite(incomingTime)) {
       console.warn("Timestamp sensor tidak valid:", data);
       return;
     }
 
-    /*
-     * Perbaikan:
-     * - Tolak data yang benar-benar lebih lama.
-     * - Timestamp yang sama tidak langsung ditolak.
-     * - Polling dan Realtime boleh menerima baris yang sama.
-     *
-     * Dengan demikian, event duplikat tidak dianggap sebagai data
-     * baru untuk grafik, tetapi juga tidak membuat timestamp yang
-     * sama menghentikan pembaruan state.
-     */
-    if (incomingTime < latestTimestampRef.current) {
-      console.log("Data lebih lama diabaikan:", timestamp);
+    const deviceId = data.device_id || data.deviceId;
+
+    if (deviceId && deviceId !== "esp32-kampus") {
+      console.warn("Data perangkat lain diabaikan:", deviceId);
       return;
     }
 
-    if (incomingTime > latestTimestampRef.current) {
-      latestTimestampRef.current = incomingTime;
+    // Abaikan data yang lebih lama dari data terakhir.
+    if (incomingTime < latestTimestampRef.current) {
+      console.warn("Data lama diabaikan:", timestamp);
+      return;
     }
 
-    const deviceId =
-      data.device_id ||
-      data.deviceId ||
-      "esp32-kampus";
+    latestTimestampRef.current = Math.max(
+      latestTimestampRef.current,
+      incomingTime
+    );
 
     const location =
-      data.location ||
       data.observation_location_name ||
+      data.location ||
       activeLocation?.location_name ||
       "Belum ada lokasi";
 
     const category =
-      data.category ||
       data.observation_location_category ||
+      data.category ||
       activeLocation?.category ||
       "";
 
     const normalizedData = {
       ...data,
-      device_id: deviceId,
-      deviceId,
-      deviceName:
-        data.device_name ||
-        data.deviceName ||
-        "AQM-01",
+      device_id: deviceId || "esp32-kampus",
+      deviceId: deviceId || "esp32-kampus",
+      deviceName: data.device_name || data.deviceName || "AQM-01",
+      gas: data.gas == null ? null : Number(data.gas),
+      adc: data.adc == null ? null : Number(data.adc),
+      rsro: data.rsro == null ? null : Number(data.rsro),
+      temperature:
+        data.temperature == null ? null : Number(data.temperature),
+      humidity:
+        data.humidity == null ? null : Number(data.humidity),
       location,
       observation_location_name: location,
       observation_location_category: category,
@@ -287,36 +284,99 @@ export default function Dashboard() {
       timestamp,
     };
 
-    console.log("DATA SENSOR TERBARU:", normalizedData);
+    // Identifikasi payload untuk mencegah data identik diproses berulang.
+const payloadSignature = JSON.stringify([
+  normalizedData.device_id,
+  normalizedData.timestamp,
+  normalizedData.location,
+  normalizedData.observation_location_category,
+  normalizedData.gas,
+  normalizedData.adc,
+  normalizedData.rsro,
+  normalizedData.temperature,
+  normalizedData.humidity,
+  normalizedData.air_quality_status,
+]);
 
-    setSensorData(normalizedData);
-    setLastUpdate(timestamp);
-    setSupabaseStatus("connected");
+if (payloadSignature === lastPayloadSignatureRef.current) {
+  return;
+}
 
-    // Tambahkan titik grafik hanya jika timestamp belum ada.
+lastPayloadSignatureRef.current = payloadSignature;
+
+console.log("DATA SENSOR TERBARU:", normalizedData);
+
+setSensorData(normalizedData);
+setLastUpdate(timestamp);
+
+
+    // Tambahkan data grafik jika timestamp belum tercatat.
     const point = {
       time: formatTime(timestamp),
-      gas: Number(data.gas) || 0,
+      gas: Number(normalizedData.gas) || 0,
       location,
       timestamp,
     };
 
     setChartData((previous) => {
-      const alreadyExists = previous.some(
-        (item) => item.timestamp === timestamp
-      );
-
-      if (alreadyExists) return previous;
+      if (previous.some((item) => item.timestamp === timestamp)) {
+        return previous;
+      }
 
       return [...previous, point]
         .sort(
           (a, b) =>
-            new Date(a.timestamp).getTime() -
-            new Date(b.timestamp).getTime()
+            Date.parse(a.timestamp) - Date.parse(b.timestamp)
         )
         .slice(-30);
     });
   };
+
+  // =====================================================
+  // SOCKET.IO REALTIME
+  // =====================================================
+
+  useEffect(() => {
+    const backendUrl = import.meta.env.VITE_API_URL;
+
+    if (!backendUrl) {
+      console.error("VITE_API_URL belum dikonfigurasi.");
+      setSocketStatus("disconnected");
+      return;
+    }
+
+    const socket = io(backendUrl, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+    });
+
+    socket.on("connect", () => {
+      console.log("Socket.IO terhubung:", socket.id);
+      setSocketStatus("connected");
+    });
+
+    socket.on("sensor_data", (data) => {
+      console.log("DATA SENSOR DARI SOCKET.IO:", data);
+      handleSensorData(data);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.warn("Socket.IO terputus:", reason);
+      setSocketStatus("disconnected");
+    });
+
+    socket.on("connect_error", (error) => {
+      console.error("Socket.IO gagal terhubung:", error.message);
+      setSocketStatus("disconnected");
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
 
   // =====================================================
   // POLLING DAN SUPABASE REALTIME
@@ -342,9 +402,10 @@ export default function Dashboard() {
 
         if (error) {
           console.error(
-            "Gagal mengambil data real-time dari sensor_current:",
+            "Gagal mengambil data sensor_current:",
             error
           );
+
           setSupabaseStatus("disconnected");
           return;
         }
@@ -353,25 +414,24 @@ export default function Dashboard() {
 
         if (data) {
           handleSensorData(data);
+        } else {
+          console.warn("Data sensor_current belum tersedia.");
         }
       } catch (error) {
         console.error("Kesalahan mengambil data sensor:", error);
-
-        if (mounted) {
-          setSupabaseStatus("disconnected");
-        }
+        setSupabaseStatus("disconnected");
       } finally {
         requestInProgressRef.current = false;
       }
     };
 
-    // Ambil data terbaru saat dashboard dibuka.
+    // Ambil data saat dashboard pertama kali dibuka.
     loadLatestData();
 
-    // Polling cadangan setiap 2 detik.
+    // Polling menjadi jalur cadangan.
     const pollingId = setInterval(loadLatestData, 2000);
 
-    // Supabase Realtime.
+    // Dengarkan pembaruan langsung dari Supabase.
     const sensorChannel = supabase
       .channel("sensor-current-dashboard")
       .on(
@@ -413,6 +473,7 @@ export default function Dashboard() {
       mounted = false;
       mountedRef.current = false;
       clearInterval(pollingId);
+      requestInProgressRef.current = false;
       supabase.removeChannel(sensorChannel);
     };
   }, []);
@@ -424,12 +485,9 @@ export default function Dashboard() {
   const currentData = sensorData;
 
   const currentStatus =
-    currentData?.air_quality_status ||
-    "MENUNGGU DATA";
+    currentData?.air_quality_status || "MENUNGGU DATA";
 
-  const deviceName =
-    currentData?.deviceName ||
-    "AQM-01";
+  const deviceName = currentData?.deviceName || "AQM-01";
 
   const locationName =
     currentData?.observation_location_name ||
@@ -561,11 +619,13 @@ export default function Dashboard() {
         }
 
         .device-title { font-size: 20px; font-weight: 700; }
+
         .device-location, .device-category {
           margin-top: 5px;
           color: #6b7280;
           font-size: 14px;
         }
+
         .device-category { font-size: 12px; }
 
         .location-status {
@@ -728,6 +788,7 @@ export default function Dashboard() {
         }
 
         .info-label { color: #6b7280; font-size: 13px; }
+
         .info-value {
           font-weight: 700;
           text-align: right;
@@ -840,6 +901,17 @@ export default function Dashboard() {
             />
             <span className="connection-text">
               ☁️ Supabase: {supabaseConnected ? "Terhubung" : "Terputus"}
+            </span>
+          </div>
+
+          <div className="connection-box">
+            <span
+              className={`connection-dot ${
+                socketStatus === "connected" ? "online" : "offline"
+              }`}
+            />
+            <span className="connection-text">
+              Socket.IO: {socketStatus === "connected" ? "Terhubung" : "Terputus"}
             </span>
           </div>
         </div>
@@ -1026,6 +1098,7 @@ export default function Dashboard() {
                 ["Status Udara", currentStatus],
                 ["Update Terakhir", formatTime(lastUpdate)],
                 ["Supabase", supabaseConnected ? "TERHUBUNG" : "TERPUTUS"],
+                ["Socket.IO", socketStatus === "connected" ? "TERHUBUNG" : "TERPUTUS"],
               ].map(([label, value]) => (
                 <div className="info-row" key={label}>
                   <div className="info-label">{label}</div>

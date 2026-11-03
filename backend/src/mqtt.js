@@ -1,3 +1,4 @@
+
 const mqtt = require('mqtt');
 const supabase = require('./supabase');
 const { sendAlert } = require('./telegram');
@@ -6,60 +7,27 @@ let mqttClient;
 let ioInstance;
 let mqttStatus = 'connecting';
 
-// =====================================================
 // JADWAL PENGAMATAN
-// =====================================================
-
 const SESSIONS = [
-    {
-        name: 'Jam Sibuk Pagi',
-        category: 'JAM SIBUK',
-        start: '07:00',
-        end: '08:00'
-    },
-    {
-        name: 'Jam Normal Pagi',
-        category: 'JAM NORMAL',
-        start: '10:00',
-        end: '11:00'
-    },
-    {
-        name: 'Jam Normal Siang',
-        category: 'JAM NORMAL',
-        start: '13:30',
-        end: '14:30'
-    },
-    {
-        name: 'Jam Sibuk Sore',
-        category: 'JAM SIBUK',
-        start: '17:00',
-        end: '18:00'
-    }
+    { name: 'Jam Sibuk Pagi', category: 'JAM SIBUK', start: '07:00', end: '08:00' },
+    { name: 'Jam Normal Pagi', category: 'JAM NORMAL', start: '10:00', end: '11:00' },
+    { name: 'Jam Normal Siang', category: 'JAM NORMAL', start: '13:30', end: '14:30' },
+    { name: 'Jam Sibuk Sore', category: 'JAM SIBUK', start: '17:00', end: '18:00' }
 ];
 
-// =====================================================
-// IDENTITAS PERANGKAT PENELITIAN
-// =====================================================
-
+// IDENTITAS PERANGKAT
 const RESEARCH_DEVICE_ID = 'esp32-kampus';
 const RESEARCH_DEVICE_NAME = 'AQM-01';
 
-// =====================================================
 // DATA REALTIME
-// =====================================================
-
 const latestSensorData = {};
 const lastRecordedMinute = {};
 const lastNotifiedSession = {};
 const activeSession = {};
 
-// =====================================================
 // WAKTU SEKARANG
-// =====================================================
-
 const getCurrentTime = () => {
     const now = new Date();
-
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
@@ -69,9 +37,7 @@ const getCurrentTime = () => {
         hours,
         minutes,
         seconds,
-
         time: `${hours}:${minutes}`,
-
         minuteKey:
             `${now.getFullYear()}-` +
             `${String(now.getMonth() + 1).padStart(2, '0')}-` +
@@ -80,18 +46,12 @@ const getCurrentTime = () => {
     };
 };
 
-// =====================================================
-// MENCARI JADWAL YANG SEDANG BERJALAN
-// =====================================================
-
+// MENCARI JADWAL
 const getCurrentSession = () => {
     const { time } = getCurrentTime();
 
     for (const session of SESSIONS) {
-        if (
-            time >= session.start &&
-            time < session.end
-        ) {
+        if (time >= session.start && time < session.end) {
             return session;
         }
     }
@@ -99,10 +59,7 @@ const getCurrentSession = () => {
     return null;
 };
 
-// =====================================================
-// MEMBUAT ID SESI JADWAL
-// =====================================================
-
+// ID SESI
 const getSessionKey = (session) => {
     const now = new Date();
 
@@ -114,10 +71,7 @@ const getSessionKey = (session) => {
     return `${date}_${session.start}_${session.end}`;
 };
 
-// =====================================================
-// VALIDASI DATA DHT22
-// =====================================================
-
+// VALIDASI DHT22
 const isDhtValid = (temperature, humidity) => {
     return (
         temperature !== null &&
@@ -129,63 +83,47 @@ const isDhtValid = (temperature, humidity) => {
     );
 };
 
-// =====================================================
-// MENGAMBIL LOKASI PENGAMATAN AKTIF
-// =====================================================
-
+// MENGAMBIL LOKASI AKTIF
 const getActiveObservationLocation = async () => {
     const { data, error } = await supabase
         .from('observation_locations')
-        .select(
-            'location_code, location_name, category'
-        )
+        .select('location_code, location_name, category')
         .eq('is_active', true)
         .limit(1)
         .single();
 
     if (error) {
         console.error(
-            '❌ Gagal mengambil lokasi aktif dari Supabase:',
+            '❌ Gagal mengambil lokasi aktif:',
             error.message
         );
-
         return null;
     }
 
     return data;
 };
 
-// =====================================================
-// MENGAMBIL STATUS SESI PENGAMBILAN DATA
-// =====================================================
-
+// MENGAMBIL STATUS SESI
 const getObservationSession = async () => {
     const { data, error } = await supabase
         .from('observation_session')
-        .select(
-            'id, is_active, started_at, ended_at, location_code, location_name'
-        )
+        .select('id, is_active, started_at, ended_at, location_code, location_name')
         .eq('id', 1)
         .maybeSingle();
 
     if (error) {
         console.error(
-            '❌ Gagal mengambil status sesi dari Supabase:',
+            '❌ Gagal mengambil status sesi:',
             error.message
         );
-
         return null;
     }
 
     return data;
 };
 
-// =====================================================
 // INITIALIZE MQTT
-// =====================================================
-
 const initMqtt = (io) => {
-
     ioInstance = io;
 
     const brokerUrl =
@@ -193,182 +131,82 @@ const initMqtt = (io) => {
         'mqtt://localhost:1883';
 
     const options = {
-        username:
-            process.env.MQTT_USERNAME || undefined,
-
-        password:
-            process.env.MQTT_PASSWORD || undefined
+        username: process.env.MQTT_USERNAME || undefined,
+        password: process.env.MQTT_PASSWORD || undefined
     };
 
-    mqttClient = mqtt.connect(
-        brokerUrl,
-        options
-    );
+    mqttClient = mqtt.connect(brokerUrl, options);
 
-    // =================================================
-    // MQTT CONNECT
-    // =================================================
+    mqttClient.on('connect', () => {
+        mqttStatus = 'connected';
 
-    mqttClient.on(
-        'connect',
-        () => {
+        console.log('Connected to MQTT Broker:', brokerUrl);
 
-            mqttStatus = 'connected';
-
-            console.log(
-                'Connected to MQTT Broker:',
-                brokerUrl
-            );
-
-            mqttClient.subscribe(
-                'umkt/air/#',
-                (err) => {
-
-                    if (err) {
-                        console.error(
-                            'MQTT subscribe error:',
-                            err.message
-                        );
-
-                        return;
-                    }
-
-                    console.log(
-                        'Subscribed to topic: umkt/air/#'
-                    );
-                }
-            );
-
-            io.emit(
-                'mqtt_status',
-                {
-                    status: 'connected'
-                }
-            );
-        }
-    );
-
-    // =================================================
-    // MQTT ERROR
-    // =================================================
-
-    mqttClient.on(
-        'error',
-        (err) => {
-
-            mqttStatus = 'error';
-
-            console.error(
-                'MQTT error:',
-                err.message
-            );
-
-            io.emit(
-                'mqtt_status',
-                {
-                    status: 'error',
-                    message: err.message
-                }
-            );
-        }
-    );
-
-    // =================================================
-    // MQTT OFFLINE
-    // =================================================
-
-    mqttClient.on(
-        'offline',
-        () => {
-
-            mqttStatus = 'disconnected';
-
-            console.log(
-                'MQTT client offline'
-            );
-
-            io.emit(
-                'mqtt_status',
-                {
-                    status: 'disconnected'
-                }
-            );
-        }
-    );
-
-    // =================================================
-    // MQTT MESSAGE
-    // =================================================
-
-    mqttClient.on(
-        'message',
-        async (topic, message) => {
-
-            console.log(
-                'MQTT MASUK:',
-                topic,
-                message.toString()
-            );
-
-            try {
-
-                const data =
-                    JSON.parse(
-                        message.toString()
-                    );
-
-                // =====================================
-                // SATU ALAT UNTUK SEMUA LOKASI
-                // =====================================
-
-                const location =
-                    await getActiveObservationLocation();
-
-                if (!location) {
-
-                    console.error(
-                        '❌ Tidak ada lokasi aktif di Supabase.'
-                    );
-
-                    return;
-                }
-
-                await handleSensorData(
-                    RESEARCH_DEVICE_ID,
-                    data,
-                    location
-                );
-
-            } catch (error) {
-
-                console.error(
-                    '❌ Gagal memproses data MQTT:',
-                    error.message
-                );
+        mqttClient.subscribe('umkt/air/#', (err) => {
+            if (err) {
+                console.error('MQTT subscribe error:', err.message);
+                return;
             }
+
+            console.log('Subscribed to topic: umkt/air/#');
+        });
+
+        io.emit('mqtt_status', { status: 'connected' });
+    });
+
+    mqttClient.on('error', (err) => {
+        mqttStatus = 'error';
+
+        console.error('MQTT error:', err.message);
+
+        io.emit('mqtt_status', {
+            status: 'error',
+            message: err.message
+        });
+    });
+
+    mqttClient.on('offline', () => {
+        mqttStatus = 'disconnected';
+
+        console.log('MQTT client offline');
+
+        io.emit('mqtt_status', { status: 'disconnected' });
+    });
+
+    mqttClient.on('message', async (topic, message) => {
+        console.log('MQTT MASUK:', topic, message.toString());
+
+        try {
+            const data = JSON.parse(message.toString());
+
+            // SATU ALAT UNTUK SEMUA LOKASI
+            const location = await getActiveObservationLocation();
+
+            if (!location) {
+                console.error('❌ Tidak ada lokasi aktif di Supabase.');
+                return;
+            }
+
+            await handleSensorData(
+                RESEARCH_DEVICE_ID,
+                data,
+                location
+            );
+
+        } catch (error) {
+            console.error(
+                '❌ Gagal memproses data MQTT:',
+                error.message
+            );
         }
-    );
+    });
 
-    // =================================================
     // CEK AKHIR SESI SETIAP DETIK
-    // =================================================
-
-    setInterval(
-        checkSessionEnd,
-        1000
-    );
+    setInterval(checkSessionEnd, 1000);
 };
 
-// =====================================================
 // HANDLE SENSOR DATA
-// =====================================================
-
-const handleSensorData = async (
-    deviceId,
-    data,
-    location
-) => {
-
+const handleSensorData = async (deviceId, data, location) => {
     const {
         gas,
         adc,
@@ -378,78 +216,84 @@ const handleSensorData = async (
         air_quality_status
     } = data;
 
-    const {
-        time,
-        minuteKey
-    } = getCurrentTime();
+    const { time, minuteKey } = getCurrentTime();
 
-    // =================================================
-    // CARI JADWAL
-    // =================================================
-
-    const session =
-        getCurrentSession();
-
-    // =================================================
-    // LOKASI PENGAMATAN
-    // =================================================
-
+    const session = getCurrentSession();
     const observationLocation = location;
 
     if (!observationLocation) {
-
         console.error(
             '❌ Data sensor tidak diproses karena lokasi aktif tidak tersedia.'
         );
-
         return;
     }
 
-    // =================================================
     // DATA TERBARU
-    // =================================================
-
     latestSensorData[deviceId] = {
-
-        device_id:
-            deviceId,
-
-        gas:
-            gas,
-
-        adc:
-            adc,
-
-        rsro:
-            rsro,
-
-        temperature:
-            temperature,
-
-        humidity:
-            humidity,
-
-        air_quality_status:
-            air_quality_status,
-
-        observation_location_code:
-            observationLocation.location_code,
-
-        observation_location_name:
-            observationLocation.location_name,
-
-        observation_location_category:
-            observationLocation.category,
-
-        timestamp:
-            new Date().toISOString()
+        device_id: deviceId,
+        gas,
+        adc,
+        rsro,
+        temperature,
+        humidity,
+        air_quality_status,
+        observation_location_code: observationLocation.location_code,
+        observation_location_name: observationLocation.location_name,
+        observation_location_category: observationLocation.category,
+        timestamp: new Date().toISOString()
     };
 
-    // =================================================
-    // PERBARUI SENSOR_CURRENT UNTUK DASHBOARD
-    // Tetap berjalan meskipun sesi pengamatan tidak aktif
-    // =================================================
+// PERBARUI DATA SENSOR TERBARU UNTUK DASHBOARD
+const sensorTimestamp = latestSensorData[deviceId]?.timestamp;
 
+if (!observationLocation || !sensorTimestamp) {
+    console.error('Data lokasi atau timestamp sensor belum tersedia.');
+} else {
+    const { error: currentError } = await supabase
+        .from('sensor_current')
+        .upsert(
+            {
+                device_id: deviceId,
+                location: observationLocation.location_name,
+                gas: gas,
+                adc: adc,
+                rsro: rsro,
+                temperature: temperature,
+                humidity: humidity,
+                air_quality_status: air_quality_status,
+                timestamp: sensorTimestamp
+            },
+            {
+                onConflict: 'device_id'
+            }
+        );
+
+    if (currentError) {
+        console.error(
+            'Gagal memperbarui sensor_current:',
+            currentError.message
+        );
+    } else {
+        console.log('Data sensor_current berhasil diperbarui.');
+    }
+}
+
+ // KIRIM DATA REALTIME KE DASHBOARD
+// Tidak menunggu proses penyimpanan Supabase.
+if (ioInstance && latestSensorData[deviceId]) {
+    ioInstance.emit(
+        'sensor_data',
+        latestSensorData[deviceId]
+    );
+
+    console.log(
+        '⚡ Data sensor dikirim melalui Socket.IO.'
+    );
+}
+
+    // PERBARUI SENSOR_CURRENT
+    // Tetap berjalan setiap data MQTT diterima,
+    // termasuk ketika di luar jadwal pengamatan.
     const { error: currentError } = await supabase
         .from('sensor_current')
         .upsert(
@@ -480,426 +324,149 @@ const handleSensorData = async (
         );
     }
 
-    // =================================================
-    // KIRIM DATA REALTIME KE DASHBOARD
-    // =================================================
-
-    if (ioInstance) {
-
-        ioInstance.emit(
-            'sensor_data',
-            latestSensorData[deviceId]
-        );
-    }
-
-    // =================================================
     // LOG SENSOR
-    // =================================================
-
     console.log('');
+    console.log('========================================');
+    console.log('DATA SENSOR');
+    console.log('========================================');
+    console.log('Waktu        :', time);
+    console.log('Device       :', deviceId);
+    console.log('Nama Device  :', RESEARCH_DEVICE_NAME);
+    console.log('Lokasi       :', observationLocation.location_name);
+    console.log('Kategori     :', observationLocation.category);
+    console.log('Gas          :', gas);
+    console.log('ADC          :', adc);
+    console.log('Rs/Ro        :', rsro);
+    console.log('Suhu         :', temperature, '°C');
+    console.log('Kelembapan   :', humidity, '%');
+    console.log('Status Udara :', air_quality_status);
 
-    console.log(
-        '========================================'
-    );
-
-    console.log(
-        'DATA SENSOR'
-    );
-
-    console.log(
-        '========================================'
-    );
-
-    console.log(
-        'Waktu        :',
-        time
-    );
-
-    console.log(
-        'Device       :',
-        deviceId
-    );
-
-    console.log(
-        'Nama Device  :',
-        RESEARCH_DEVICE_NAME
-    );
-
-    console.log(
-        'Lokasi       :',
-        observationLocation.location_name
-    );
-
-    console.log(
-        'Kategori     :',
-        observationLocation.category
-    );
-
-    console.log(
-        'Gas          :',
-        gas
-    );
-
-    console.log(
-        'ADC          :',
-        adc
-    );
-
-    console.log(
-        'Rs/Ro        :',
-        rsro
-    );
-
-    console.log(
-        'Suhu         :',
-        temperature,
-        '°C'
-    );
-
-    console.log(
-        'Kelembapan   :',
-        humidity,
-        '%'
-    );
-
-    console.log(
-        'Status Udara :',
-        air_quality_status
-    );
-
-    // =================================================
     // CEK JADWAL
-    // =================================================
-
     if (!session) {
-
-        console.log(
-            'Di luar jadwal pengamatan.'
-        );
-
-        console.log(
-            'Data tidak direkam.'
-        );
-
-        console.log(
-            '========================================'
-        );
-
+        console.log('Di luar jadwal pengamatan.');
+        console.log('Data tidak direkam.');
+        console.log('========================================');
         return;
     }
 
-    // =================================================
-    // CEK TOMBOL SESI PENGAMBILAN DATA
-    // =================================================
-
-    const observationSession =
-        await getObservationSession();
+    // CEK TOMBOL SESI
+    const observationSession = await getObservationSession();
 
     if (!observationSession) {
-
-        console.log(
-            '⚠️ Status sesi pengambilan data tidak tersedia.'
-        );
-
-        console.log(
-            'Data tidak direkam.'
-        );
-
-        console.log(
-            '========================================'
-        );
-
+        console.log('⚠️ Status sesi pengambilan data tidak tersedia.');
+        console.log('Data tidak direkam.');
+        console.log('========================================');
         return;
     }
 
-    // =================================================
     // SESI TIDAK AKTIF
-    // =================================================
-
     if (observationSession.is_active !== true) {
-
-        console.log(
-            '🔴 SESI PENGAMBILAN DATA TIDAK AKTIF.'
-        );
-
-        console.log(
-            'Sensor tetap membaca data.'
-        );
-
-        console.log(
-            'Data tidak direkam ke Supabase.'
-        );
-
-        console.log(
-            '========================================'
-        );
-
+        console.log('🔴 SESI PENGAMBILAN DATA TIDAK AKTIF.');
+        console.log('Sensor tetap membaca data.');
+        console.log('Data tidak direkam ke Supabase.');
+        console.log('========================================');
         return;
     }
 
-    // =================================================
     // VALIDASI LOKASI SESI
-    // =================================================
-
     if (
         observationSession.location_code &&
-        observationSession.location_code !==
-            observationLocation.location_code
+        observationSession.location_code !== observationLocation.location_code
     ) {
-
-        console.log(
-            '⚠️ Lokasi sesi berbeda dengan lokasi aktif.'
-        );
-
-        console.log(
-            'Data tidak direkam.'
-        );
-
-        console.log(
-            '========================================'
-        );
-
+        console.log('⚠️ Lokasi sesi berbeda dengan lokasi aktif.');
+        console.log('Data tidak direkam.');
+        console.log('========================================');
         return;
     }
 
-    // =================================================
     // SESI MANUAL AKTIF
-    // =================================================
+    const sessionKey = getSessionKey(session);
 
-    const sessionKey =
-        getSessionKey(session);
-
-    if (
-        activeSession[deviceId] !==
-        sessionKey
-    ) {
-
-        activeSession[deviceId] =
-            sessionKey;
+    if (activeSession[deviceId] !== sessionKey) {
+        activeSession[deviceId] = sessionKey;
 
         console.log('');
-
-        console.log(
-            '🟢 SESI PENGAMATAN DIMULAI'
-        );
-
-        console.log(
-            'Sesi       :',
-            session.name
-        );
-
-        console.log(
-            'Kategori   :',
-            session.category
-        );
-
-        console.log(
-            'Waktu      :',
-            `${session.start} - ${session.end}`
-        );
-
-        console.log(
-            'Lokasi     :',
-            observationLocation.location_name
-        );
-
-        console.log(
-            'Status     :',
-            'PENGAMBILAN DATA AKTIF'
-        );
-
+        console.log('🟢 SESI PENGAMATAN DIMULAI');
+        console.log('Sesi       :', session.name);
+        console.log('Kategori   :', session.category);
+        console.log('Waktu      :', `${session.start} - ${session.end}`);
+        console.log('Lokasi     :', observationLocation.location_name);
+        console.log('Status     :', 'PENGAMBILAN DATA AKTIF');
         console.log('');
     }
 
-    // =================================================
-    // REKAM SUPABASE 1 KALI SETIAP MENIT
-    // =================================================
-
+    // REKAM 1 KALI SETIAP MENIT
     const recordKey =
         `${deviceId}_` +
         `${observationLocation.location_code}_` +
         `${minuteKey}`;
 
-    if (
-        lastRecordedMinute[deviceId] ===
-        recordKey
-    ) {
-
-        console.log(
-            'Data sudah direkam untuk menit ini.'
-        );
-
-        console.log(
-            '========================================'
-        );
-
+    if (lastRecordedMinute[deviceId] === recordKey) {
+        console.log('Data sudah direkam untuk menit ini.');
+        console.log('========================================');
         return;
     }
 
-    // =================================================
-    // SIMPAN LANGSUNG KE SUPABASE
-    // =================================================
-
-    const {
-        error: supabaseError
-    } = await supabase
+    // SIMPAN RIWAYAT KE SENSOR_DATA
+    const { error: supabaseError } = await supabase
         .from('sensor_data')
         .insert([
             {
-                device_id:
-                    deviceId,
-
-                location:
-                    observationLocation.location_name,
-
-                gas:
-                    gas,
-
-                adc:
-                    adc,
-
-                rsro:
-                    rsro,
-
-                temperature:
-                    temperature,
-
-                humidity:
-                    humidity,
-
-                air_quality_status:
-                    air_quality_status,
-
-                timestamp:
-                    new Date().toISOString()
+                device_id: deviceId,
+                location: observationLocation.location_name,
+                gas,
+                adc,
+                rsro,
+                temperature,
+                humidity,
+                air_quality_status,
+                timestamp: new Date().toISOString()
             }
         ]);
 
     if (supabaseError) {
-
         console.error(
             '❌ Gagal menyimpan data ke Supabase:',
             supabaseError.message
         );
 
-        console.log(
-            '========================================'
-        );
-
+        console.log('========================================');
         return;
     }
 
-    // =================================================
     // DATA BERHASIL DISIMPAN
-    // =================================================
-
-    lastRecordedMinute[deviceId] =
-        recordKey;
+    lastRecordedMinute[deviceId] = recordKey;
 
     console.log('');
-
-    console.log(
-        '☁️ DATA BERHASIL DIREKAM KE SUPABASE'
-    );
-
-    console.log(
-        'Waktu      :',
-        time
-    );
-
-    console.log(
-        'Sesi       :',
-        session.name
-    );
-
-    console.log(
-        'Kategori   :',
-        session.category
-    );
-
-    console.log(
-        'Lokasi     :',
-        observationLocation.location_name
-    );
-
-    console.log(
-        'Gas        :',
-        gas
-    );
-
-    console.log(
-        'ADC        :',
-        adc
-    );
-
-    console.log(
-        'Rs/Ro      :',
-        rsro
-    );
-
-    console.log(
-        'Suhu       :',
-        temperature,
-        '°C'
-    );
-
-    console.log(
-        'Kelembapan :',
-        humidity,
-        '%'
-    );
-
-    console.log(
-        'Status     :',
-        air_quality_status
-    );
-
-    console.log(
-        'Interval   : 1 menit'
-    );
-
-    console.log(
-        '========================================'
-    );
+    console.log('☁️ DATA BERHASIL DIREKAM KE SUPABASE');
+    console.log('Waktu      :', time);
+    console.log('Sesi       :', session.name);
+    console.log('Kategori   :', session.category);
+    console.log('Lokasi     :', observationLocation.location_name);
+    console.log('Gas        :', gas);
+    console.log('ADC        :', adc);
+    console.log('Rs/Ro      :', rsro);
+    console.log('Suhu       :', temperature, '°C');
+    console.log('Kelembapan :', humidity, '%');
+    console.log('Status     :', air_quality_status);
+    console.log('Interval   : 1 menit');
+    console.log('========================================');
 };
 
-// =====================================================
 // CEK AKHIR SESI
-// =====================================================
-
 const checkSessionEnd = () => {
+    const { time } = getCurrentTime();
 
-    const {
-        time
-    } = getCurrentTime();
+    for (const session of SESSIONS) {
+        if (time === session.end) {
+            const sessionKey = getSessionKey(session);
+            const deviceId = RESEARCH_DEVICE_ID;
 
-    for (
-        const session of SESSIONS
-    ) {
-
-        if (
-            time === session.end
-        ) {
-
-            const sessionKey =
-                getSessionKey(session);
-
-            const deviceId =
-                RESEARCH_DEVICE_ID;
-
-            if (
-                lastNotifiedSession[
-                    deviceId
-                ] === sessionKey
-            ) {
-
+            if (lastNotifiedSession[deviceId] === sessionKey) {
                 continue;
             }
 
-            const sensor =
-                latestSensorData[
-                    deviceId
-                ];
+            const sensor = latestSensorData[deviceId];
 
             if (!sensor) {
                 continue;
@@ -915,65 +482,36 @@ const checkSessionEnd = () => {
     }
 };
 
-// =====================================================
 // KIRIM LAPORAN SESI TELEGRAM
-// =====================================================
-
 const sendSessionReport = async (
     deviceId,
     sensor,
     session,
     sessionKey
 ) => {
-
-    // =================================================
-    // CEK APAKAH SESI MANUAL PERNAH AKTIF
-    // =================================================
-
-    const observationSession =
-        await getObservationSession();
+    const observationSession = await getObservationSession();
 
     if (
         !observationSession ||
-        observationSession.location_code !==
-            sensor.observation_location_code
+        observationSession.location_code !== sensor.observation_location_code
     ) {
-
         return;
     }
 
-    // =================================================
     // VALIDASI DHT22
-    // =================================================
-
-    if (
-        !isDhtValid(
-            sensor.temperature,
-            sensor.humidity
-        )
-    ) {
-
+    if (!isDhtValid(sensor.temperature, sensor.humidity)) {
         console.log(
             '⚠️ Laporan Telegram tidak dikirim karena data DHT22 tidak valid.'
         );
-
         return;
     }
 
-    // =================================================
     // STATUS UDARA
-    // =================================================
+    const currentStatus = String(
+        sensor.air_quality_status || 'TIDAK DIKETAHUI'
+    ).trim().toUpperCase();
 
-    const currentStatus =
-        String(
-            sensor.air_quality_status ||
-            'TIDAK DIKETAHUI'
-        )
-            .trim()
-            .toUpperCase();
-
-    let statusIcon =
-        '🟢';
+    let statusIcon = '🟢';
 
     if (
         currentStatus.includes('BURUK') ||
@@ -981,179 +519,77 @@ const sendSessionReport = async (
         currentStatus.includes('TIDAK SEHAT') ||
         currentStatus.includes('BERBAHAYA')
     ) {
-
-        statusIcon =
-            '🔴';
+        statusIcon = '🔴';
     }
 
-    // =================================================
     // ICON KATEGORI
-    // =================================================
+    let categoryIcon = '🟢';
 
-    let categoryIcon =
-        '🟢';
-
-    if (
-        session.category ===
-        'JAM SIBUK'
-    ) {
-
-        categoryIcon =
-            '🔴';
+    if (session.category === 'JAM SIBUK') {
+        categoryIcon = '🔴';
     }
 
-    // =================================================
     // LOKASI
-    // =================================================
-
     const locationName =
         sensor.observation_location_name ||
         'Lokasi tidak diketahui';
 
-    // =================================================
     // PESAN TELEGRAM
-    // =================================================
-
     const telegramMessage =
-
         `${categoryIcon} *LAPORAN SESI PENGAMATAN*\n\n` +
-
         `📌 *${session.name}*\n` +
-
         `📊 Kategori: ${session.category}\n` +
-
         `⏰ Waktu: ${session.start} - ${session.end}\n\n` +
-
         `${statusIcon} *Kondisi Udara: ${currentStatus}*\n\n` +
-
         `🌫️ Gas: ${sensor.gas}\n` +
-
         `📊 ADC: ${sensor.adc}\n` +
-
         `🔬 Rs/Ro: ${sensor.rsro}\n` +
-
         `🌡️ Suhu: ${sensor.temperature} °C\n` +
-
         `💧 Kelembapan: ${sensor.humidity} %\n\n` +
-
         `📍 Lokasi: ${locationName}\n` +
-
         `🖥️ Perangkat: ${RESEARCH_DEVICE_NAME}\n\n` +
-
         `💾 Interval perekaman: 1 menit\n` +
-
         `📱 Notifikasi: akhir sesi`;
 
-    // =================================================
     // KIRIM TELEGRAM
-    // =================================================
-
     try {
+        await sendAlert(telegramMessage);
 
-        await sendAlert(
-            telegramMessage
-        );
-
-        // =================================================
-        // KIRIM NOTIFIKASI KE DASHBOARD
-        // =================================================
-
+        // NOTIFIKASI DASHBOARD
         if (ioInstance) {
-
             const notificationObject = {
-
-                id:
-                    `${Date.now()}-${deviceId}`,
-
-                title:
-                    'Laporan Kualitas Udara',
-
-                session:
-                    session.name,
-
-                category:
-                    session.category,
-
-                location:
-                    locationName,
-
-                device_name:
-                    RESEARCH_DEVICE_NAME,
-
-                gas:
-                    sensor.gas,
-
-                adc:
-                    sensor.adc,
-
-                rsro:
-                    sensor.rsro,
-
-                temperature:
-                    sensor.temperature,
-
-                humidity:
-                    sensor.humidity,
-
-                air_quality_status:
-                    currentStatus,
-
-                timestamp:
-                    new Date().toISOString()
+                id: `${Date.now()}-${deviceId}`,
+                title: 'Laporan Kualitas Udara',
+                session: session.name,
+                category: session.category,
+                location: locationName,
+                device_name: RESEARCH_DEVICE_NAME,
+                gas: sensor.gas,
+                adc: sensor.adc,
+                rsro: sensor.rsro,
+                temperature: sensor.temperature,
+                humidity: sensor.humidity,
+                air_quality_status: currentStatus,
+                timestamp: new Date().toISOString()
             };
 
-            ioInstance.emit(
-                'notification',
-                notificationObject
-            );
+            ioInstance.emit('notification', notificationObject);
         }
 
-        // =================================================
         // LOG TELEGRAM
-        // =================================================
-
+        console.log('');
+        console.log('========================================');
+        console.log('📱 TELEGRAM LAPORAN SESI TERKIRIM');
+        console.log('Sesi:', session.name);
+        console.log('Waktu:', `${session.start} - ${session.end}`);
+        console.log('Lokasi:', locationName);
+        console.log('Status:', currentStatus);
+        console.log('========================================');
         console.log('');
 
-        console.log(
-            '========================================'
-        );
-
-        console.log(
-            '📱 TELEGRAM LAPORAN SESI TERKIRIM'
-        );
-
-        console.log(
-            'Sesi:',
-            session.name
-        );
-
-        console.log(
-            'Waktu:',
-            `${session.start} - ${session.end}`
-        );
-
-        console.log(
-            'Lokasi:',
-            locationName
-        );
-
-        console.log(
-            'Status:',
-            currentStatus
-        );
-
-        console.log(
-            '========================================'
-        );
-
-        console.log('');
-
-        lastNotifiedSession[
-            deviceId
-        ] = sessionKey;
+        lastNotifiedSession[deviceId] = sessionKey;
 
     } catch (error) {
-
         console.error(
             '❌ Gagal mengirim laporan Telegram:',
             error.message
@@ -1161,10 +597,7 @@ const sendSessionReport = async (
     }
 };
 
-// =====================================================
 // EXPORT
-// =====================================================
-
 module.exports = {
     initMqtt,
     handleSensorData,
