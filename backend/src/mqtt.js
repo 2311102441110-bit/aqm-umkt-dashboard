@@ -446,6 +446,41 @@ const handleSensorData = async (
     };
 
     // =================================================
+    // PERBARUI SENSOR_CURRENT UNTUK DASHBOARD
+    // Tetap berjalan meskipun sesi pengamatan tidak aktif
+    // =================================================
+
+    const { error: currentError } = await supabase
+        .from('sensor_current')
+        .upsert(
+            {
+                device_id: deviceId,
+                location: observationLocation.location_name,
+                gas,
+                adc,
+                rsro,
+                temperature,
+                humidity,
+                air_quality_status,
+                timestamp: latestSensorData[deviceId].timestamp
+            },
+            {
+                onConflict: 'device_id'
+            }
+        );
+
+    if (currentError) {
+        console.error(
+            '❌ Gagal memperbarui sensor_current:',
+            currentError.message
+        );
+    } else {
+        console.log(
+            '✅ Data sensor_current berhasil diperbarui untuk dashboard.'
+        );
+    }
+
+    // =================================================
     // KIRIM DATA REALTIME KE DASHBOARD
     // =================================================
 
