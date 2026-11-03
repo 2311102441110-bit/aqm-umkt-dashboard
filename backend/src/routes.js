@@ -1,4 +1,3 @@
-
 const express = require('express');
 const supabase = require('./supabase');
 const { getMqttStatus } = require('./mqtt');
@@ -142,24 +141,28 @@ router.put('/observation-location', async (req, res) => {
 
 // =====================================================
 // GET LATEST SENSOR DATA
+// Mengambil data terbaru dari sensor_current
 // =====================================================
 
 router.get('/data/latest', async (req, res) => {
     try {
         const { data, error } = await supabase
-            .from('sensor_data')
+            .from('sensor_current')
             .select('*')
             .eq('device_id', DEVICE_ID)
-            .order('timestamp', { ascending: false })
-            .limit(1);
+            .maybeSingle();
 
         if (error) throw error;
 
-        const rows = (data || []).map((item) => ({
-            ...item,
+        if (!data) {
+            return res.json([]);
+        }
+
+        const rows = [{
+            ...data,
             name: DEVICE_NAME,
-            device_location: item.location
-        }));
+            device_location: data.location
+        }];
 
         return res.json(rows);
     } catch (err) {
