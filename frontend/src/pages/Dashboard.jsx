@@ -221,116 +221,105 @@ export default function Dashboard() {
   // TERIMA DAN NORMALISASI DATA SENSOR
   // =====================================================
 
-  const handleSensorData = (data) => {
-    if (!data) return;
+  
+const handleSensorData = (data, source = "unknown") => {
+  if (!data) return;
 
-    const timestamp = data.timestamp;
-    const incomingTime = timestamp ? Date.parse(timestamp) : NaN;
+  const deviceId = data.device_id || data.deviceId || "esp32-kampus";
 
-    if (!Number.isFinite(incomingTime)) {
-      console.warn("Timestamp sensor tidak valid:", data);
-      return;
-    }
+  if (deviceId !== "esp32-kampus") {
+    console.warn("Data perangkat lain diabaikan:", deviceId);
+    return;
+  }
 
-    const deviceId = data.device_id || data.deviceId;
+  // Timestamp dari backend digunakan jika valid.
+  // Jika tidak tersedia, gunakan waktu penerimaan di dashboard.
+  const parsedTime = data.timestamp
+    ? Date.parse(data.timestamp)
+    : NaN;
 
-    if (deviceId && deviceId !== "esp32-kampus") {
-      console.warn("Data perangkat lain diabaikan:", deviceId);
-      return;
-    }
+  const timestamp = Number.isFinite(parsedTime)
+    ? new Date(parsedTime).toISOString()
+    : new Date().toISOString();
 
-    // Abaikan data yang lebih lama dari data terakhir.
-    if (incomingTime < latestTimestampRef.current) {
-      console.warn("Data lama diabaikan:", timestamp);
-      return;
-    }
+  // Abaikan data Supabase yang lebih lama dari data terbaru.
+  // Event Socket.IO tetap diprioritaskan sebagai data langsung.
+  if (
+    source !== "socket" &&
+    parsedTime > 0 &&
+    parsedTime < latestTimestampRef.current
+  ) {
+    return;
+  }
 
-    latestTimestampRef.current = Math.max(
-      latestTimestampRef.current,
-      incomingTime
-    );
+  if (source === "socket" || parsedTime > latestTimestampRef.current) {
+    latestTimestampRef.current = Date.parse(timestamp);
+  }
 
-    const location =
-      data.observation_location_name ||
-      data.location ||
-      activeLocation?.location_name ||
-      "Belum ada lokasi";
+  const location =
+    data.observation_location_name ||
+    data.location ||
+    activeLocation?.location_name ||
+    "Belum ada lokasi";
 
-    const category =
-      data.observation_location_category ||
-      data.category ||
-      activeLocation?.category ||
-      "";
+  const category =
+    data.observation_location_category ||
+    data.category ||
+    activeLocation?.category ||
+    "";
 
-    const normalizedData = {
-      ...data,
-      device_id: deviceId || "esp32-kampus",
-      deviceId: deviceId || "esp32-kampus",
-      deviceName: data.device_name || data.deviceName || "AQM-01",
-      gas: data.gas == null ? null : Number(data.gas),
-      adc: data.adc == null ? null : Number(data.adc),
-      rsro: data.rsro == null ? null : Number(data.rsro),
-      temperature:
-        data.temperature == null ? null : Number(data.temperature),
-      humidity:
-        data.humidity == null ? null : Number(data.humidity),
-      location,
-      observation_location_name: location,
-      observation_location_category: category,
-      air_quality_status:
-        data.air_quality_status ||
-        data.status ||
-        "MENUNGGU DATA",
-      timestamp,
-    };
-
-    // Identifikasi payload untuk mencegah data identik diproses berulang.
-const payloadSignature = JSON.stringify([
-  normalizedData.device_id,
-  normalizedData.timestamp,
-  normalizedData.location,
-  normalizedData.observation_location_category,
-  normalizedData.gas,
-  normalizedData.adc,
-  normalizedData.rsro,
-  normalizedData.temperature,
-  normalizedData.humidity,
-  normalizedData.air_quality_status,
-]);
-
-if (payloadSignature === lastPayloadSignatureRef.current) {
-  return;
-}
-
-lastPayloadSignatureRef.current = payloadSignature;
-
-console.log("DATA SENSOR TERBARU:", normalizedData);
-
-setSensorData(normalizedData);
-setLastUpdate(timestamp);
-
-
-    // Tambahkan data grafik jika timestamp belum tercatat.
-    const point = {
-      time: formatTime(timestamp),
-      gas: Number(normalizedData.gas) || 0,
-      location,
-      timestamp,
-    };
-
-    setChartData((previous) => {
-      if (previous.some((item) => item.timestamp === timestamp)) {
-        return previous;
-      }
-
-      return [...previous, point]
-        .sort(
-          (a, b) =>
-            Date.parse(a.timestamp) - Date.parse(b.timestamp)
-        )
-        .slice(-30);
-    });
+  const normalizedData = {
+    ...data,
+    device_id: deviceId,
+    deviceId,
+    deviceName: data.device_name || data.deviceName || "AQM-01",
+    gas: data.gas == null ? null : Number(data.gas),
+    adc: data.adc == null ? null : Number(data.adc),
+    rsro: data.rsro == null ? null : Number(data.rsro),
+    temperature: data.temperature == null
+      ? null
+      : Number(data.temperature),
+    humidity: data.humidity == null
+      ? null
+      : Number(data.humidity),
+    location,
+    observation_location_name: location,
+    observation_location_category: category,
+    air_quality_status:
+      data.air_quality_status ||
+      data.status ||
+      "BELUM_KALIBRASI",
+    timestamp,
   };
+
+  console.log(
+    `DATA SENSOR DITERIMA (${source}):`,
+    normalizedData
+  );
+
+  setSensorData(normalizedData);
+  setLastUpdate(timestamp);
+
+  const point = {
+    time: formatTime(timestamp),
+    gas: normalizedData.gas ?? 0,
+    location,
+    timestamp,
+  };
+
+  setChartData((previous) => {
+    if (previous.some((item) => item.timestamp === timestamp)) {
+      return previous;
+    }
+
+    return [...previous, point]
+      .sort(
+        (a, b) =>
+          Date.parse(a.timestamp) - Date.parse(b.timestamp)
+      )
+      .slice(-30);
+  });
+};
 
   // =====================================================
   // SOCKET.IO REALTIME
@@ -360,7 +349,7 @@ setLastUpdate(timestamp);
 
     socket.on("sensor_data", (data) => {
       console.log("DATA SENSOR DARI SOCKET.IO:", data);
-      handleSensorData(data);
+      handleSensorData(data, "socket");
     });
 
     socket.on("disconnect", (reason) => {
@@ -413,7 +402,7 @@ setLastUpdate(timestamp);
         setSupabaseStatus("connected");
 
         if (data) {
-          handleSensorData(data);
+          handleSensorData(data, "supabase");
         } else {
           console.warn("Data sensor_current belum tersedia.");
         }
@@ -450,7 +439,7 @@ setLastUpdate(timestamp);
             payload.new
           );
 
-          handleSensorData(payload.new);
+          handleSensorData(payload.new, "supabase");
         }
       )
       .subscribe((status) => {
