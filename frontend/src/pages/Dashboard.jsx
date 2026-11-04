@@ -222,18 +222,15 @@ export default function Dashboard() {
   // =====================================================
 
   
+
 const handleSensorData = (data, source = "unknown") => {
   if (!data) return;
 
-  const deviceId = data.device_id || data.deviceId || "esp32-kampus";
+  const deviceId =
+    data.device_id || data.deviceId || "esp32-kampus";
 
-  if (deviceId !== "esp32-kampus") {
-    console.warn("Data perangkat lain diabaikan:", deviceId);
-    return;
-  }
+  if (deviceId !== "esp32-kampus") return;
 
-  // Timestamp dari backend digunakan jika valid.
-  // Jika tidak tersedia, gunakan waktu penerimaan di dashboard.
   const parsedTime = data.timestamp
     ? Date.parse(data.timestamp)
     : NaN;
@@ -242,18 +239,21 @@ const handleSensorData = (data, source = "unknown") => {
     ? new Date(parsedTime).toISOString()
     : new Date().toISOString();
 
-  // Abaikan data Supabase yang lebih lama dari data terbaru.
-  // Event Socket.IO tetap diprioritaskan sebagai data langsung.
+  // Data dari Socket.IO adalah jalur realtime utama.
+  // Data Supabase yang lebih lama tidak boleh menimpa data baru.
   if (
     source !== "socket" &&
-    parsedTime > 0 &&
+    Number.isFinite(parsedTime) &&
     parsedTime < latestTimestampRef.current
   ) {
     return;
   }
 
-  if (source === "socket" || parsedTime > latestTimestampRef.current) {
-    latestTimestampRef.current = Date.parse(timestamp);
+  if (Number.isFinite(parsedTime)) {
+    latestTimestampRef.current = Math.max(
+      latestTimestampRef.current,
+      parsedTime
+    );
   }
 
   const location =
@@ -268,41 +268,84 @@ const handleSensorData = (data, source = "unknown") => {
     activeLocation?.category ||
     "";
 
-  const normalizedData = {
+  const getValue = (...values) => {
+    const value = values.find(
+      (item) =>
+        item !== null &&
+        item !== undefined &&
+        item !== "" &&
+        Number.isFinite(Number(item))
+    );
+
+    return value === undefined ? null : Number(value);
+  };
+
+  const incoming = {
     ...data,
     device_id: deviceId,
     deviceId,
     deviceName: data.device_name || data.deviceName || "AQM-01",
-    gas: data.gas == null ? null : Number(data.gas),
-    adc: data.adc == null ? null : Number(data.adc),
-    rsro: data.rsro == null ? null : Number(data.rsro),
-    temperature: data.temperature == null
-      ? null
-      : Number(data.temperature),
-    humidity: data.humidity == null
-      ? null
-      : Number(data.humidity),
+
+    gas: getValue(data.gas, data.gasLevel),
+    adc: getValue(data.adc, data.adcValue),
+    rsro: getValue(data.rsro, data.rs_ro, data.rsRo),
+
+    temperature: getValue(
+      data.temperature,
+      data.temp,
+      data.suhu
+    ),
+
+    humidity: getValue(
+      data.humidity,
+      data.hum,
+      data.kelembapan
+    ),
+
     location,
     observation_location_name: location,
     observation_location_category: category,
+
     air_quality_status:
       data.air_quality_status ||
+      data.airStatus ||
       data.status ||
       "BELUM_KALIBRASI",
+
     timestamp,
   };
 
-  console.log(
-    `DATA SENSOR DITERIMA (${source}):`,
-    normalizedData
-  );
+  // Pertahankan pembacaan terakhir yang valid jika pesan
+  // berikutnya mengirim null pada salah satu sensor.
+  setSensorData((previous) => {
+    if (!previous) return incoming;
 
-  setSensorData(normalizedData);
+    return {
+      ...previous,
+      ...incoming,
+      gas: incoming.gas ?? previous.gas ?? null,
+      adc: incoming.adc ?? previous.adc ?? null,
+      rsro: incoming.rsro ?? previous.rsro ?? null,
+      temperature:
+        incoming.temperature ?? previous.temperature ?? null,
+      humidity:
+        incoming.humidity ?? previous.humidity ?? null,
+      air_quality_status:
+        incoming.air_quality_status === "BELUM_KALIBRASI" &&
+        previous.air_quality_status &&
+        previous.air_quality_status !== "BELUM_KALIBRASI"
+          ? previous.air_quality_status
+          : incoming.air_quality_status,
+    };
+  });
+
   setLastUpdate(timestamp);
+
+  console.log(`DATA SENSOR DITERIMA (${source}):`, incoming);
 
   const point = {
     time: formatTime(timestamp),
-    gas: normalizedData.gas ?? 0,
+    gas: incoming.gas ?? 0,
     location,
     timestamp,
   };
@@ -320,6 +363,7 @@ const handleSensorData = (data, source = "unknown") => {
       .slice(-30);
   });
 };
+
 
   // =====================================================
   // SOCKET.IO REALTIME
