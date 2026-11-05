@@ -50,26 +50,56 @@ let currentWriteInProgress = false;
 let pendingCurrentWrite = null;
 
 // ==========================================
-// WAKTU SEKARANG
+// FORMAT WAKTU WITA
+// ==========================================
+const WITA_DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Makassar',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+});
+
+// ==========================================
+// MENGAMBIL KOMPONEN TANGGAL DAN WAKTU WITA
+// ==========================================
+const getWitaDateParts = (date = new Date()) => {
+    const parts = WITA_DATE_FORMATTER.formatToParts(date);
+
+    return parts.reduce((result, part) => {
+        if (part.type !== 'literal') {
+            result[part.type] = part.value;
+        }
+
+        return result;
+    }, {});
+};
+
+// ==========================================
+// WAKTU SEKARANG - ZONA WITA
 // ==========================================
 const getCurrentTime = () => {
     const now = new Date();
 
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second
+    } = getWitaDateParts(now);
 
     return {
         now,
-        hours,
-        minutes,
-        seconds,
-        time: `${hours}:${minutes}`,
-        minuteKey:
-            `${now.getFullYear()}-` +
-            `${String(now.getMonth() + 1).padStart(2, '0')}-` +
-            `${String(now.getDate()).padStart(2, '0')} ` +
-            `${hours}:${minutes}`
+        hours: hour,
+        minutes: minute,
+        seconds: second,
+        time: `${hour}:${minute}`,
+        minuteKey: `${year}-${month}-${day} ${hour}:${minute}`
     };
 };
 
@@ -85,15 +115,16 @@ const getCurrentSession = () => {
 };
 
 // ==========================================
-// ID SESI
+// ID SESI - MENGGUNAKAN TANGGAL WITA
 // ==========================================
 const getSessionKey = (session) => {
-    const now = new Date();
+    const {
+        year,
+        month,
+        day
+    } = getWitaDateParts();
 
-    const date =
-        `${now.getFullYear()}-` +
-        `${String(now.getMonth() + 1).padStart(2, '0')}-` +
-        `${String(now.getDate()).padStart(2, '0')}`;
+    const date = `${year}-${month}-${day}`;
 
     return `${date}_${session.start}_${session.end}`;
 };
@@ -417,7 +448,7 @@ const handleSensorData = async (deviceId, data, location) => {
     console.log('========================================');
     console.log('DATA SENSOR');
     console.log('========================================');
-    console.log('Waktu        :', time);
+    console.log('Waktu        :', time, 'WITA');
     console.log('Device       :', deviceId);
     console.log('Nama Device  :', RESEARCH_DEVICE_NAME);
     console.log('Lokasi       :', location.location_name);
@@ -547,7 +578,7 @@ const handleSensorData = async (deviceId, data, location) => {
 
     console.log('');
     console.log('DATA BERHASIL DIREKAM KE SUPABASE');
-    console.log('Waktu      :', time);
+    console.log('Waktu      :', time, 'WITA');
     console.log('Sesi       :', session.name);
     console.log('Kategori   :', session.category);
     console.log('Lokasi     :', location.location_name);
