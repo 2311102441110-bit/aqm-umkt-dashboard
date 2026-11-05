@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import Header from '../components/Header';
 import { supabase } from '../lib/supabase';
 
+// Alamat backend Railway
 const SOCKET_URL =
   import.meta.env.VITE_API_URL ||
   'https://aqm-umkt-dashboard-production-eb4c.up.railway.app';
@@ -14,7 +15,7 @@ const Notifikasi = () => {
   const [loading, setLoading] = useState(true);
   const [hasNewNotification, setHasNewNotification] = useState(false);
 
-  // Menyimpan ID notifikasi yang sudah diterima
+  // Mencegah notifikasi yang sama masuk dua kali
   const notificationIds = useRef(new Set());
 
   // =====================================================
@@ -41,12 +42,11 @@ const Notifikasi = () => {
 
           loadedNotifications.forEach((item) => {
             if (item.id) {
-              notificationIds.current.add(item.id);
+              notificationIds.current.add(String(item.id));
             }
           });
 
-          // Gabungkan data Supabase dengan notifikasi realtime
-          // agar notifikasi baru tidak tertimpa hasil pemuatan.
+          // Gabungkan data Supabase dengan data realtime
           setNotifications((previous) => {
             const combined = [...previous, ...loadedNotifications];
             const unique = [];
@@ -71,10 +71,15 @@ const Notifikasi = () => {
               )
               .slice(0, 50);
           });
+
+          console.log(
+            '✅ Riwayat notifikasi berhasil dimuat:',
+            loadedNotifications.length
+          );
         }
       } catch (error) {
         console.error(
-          'Gagal mengambil notifikasi dari Supabase:',
+          '❌ Gagal mengambil notifikasi dari Supabase:',
           error.message
         );
       } finally {
@@ -96,42 +101,65 @@ const Notifikasi = () => {
   // =====================================================
 
   useEffect(() => {
+    console.log('🔌 Menghubungkan Socket.IO ke:', SOCKET_URL);
+
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       timeout: 10000
     });
 
     // ---------------------------------------------------
-    // STATUS MQTT
+    // MENERIMA STATUS MQTT DARI BACKEND
     // ---------------------------------------------------
 
     const handleMqttStatus = (data) => {
-      if (!data?.status) return;
+      console.log('📡 STATUS MQTT DARI BACKEND:', data);
 
-      setMqttStatus(data.status);
+      // Mendukung format string maupun object
+      const receivedStatus =
+        typeof data === 'string'
+          ? data
+          : data?.status;
+
+      if (!receivedStatus) {
+        console.warn('⚠️ Status MQTT tidak ditemukan:', data);
+        return;
+      }
+
+      const normalizedStatus = String(receivedStatus)
+        .toLowerCase()
+        .trim();
+
+      setMqttStatus(normalizedStatus);
+
+      console.log('📡 Status MQTT diperbarui:', normalizedStatus);
     };
 
     // ---------------------------------------------------
-    // NOTIFIKASI BARU
+    // MENERIMA NOTIFIKASI BARU
     // ---------------------------------------------------
 
     const handleNotification = (notification) => {
-      console.log('🔔 NOTIFIKASI BARU:', notification);
+      console.log('🔔 NOTIFIKASI BARU DITERIMA:', notification);
 
-      if (!notification) return;
+      if (!notification) {
+        return;
+      }
 
       const notificationId = notification.id
         ? String(notification.id)
         : null;
 
-      // Cegah notifikasi dengan ID yang sama masuk dua kali
+      // Cegah ID yang sama masuk dua kali
       if (
         notificationId &&
         notificationIds.current.has(notificationId)
       ) {
+        console.log('Notifikasi duplikat diabaikan:', notificationId);
         return;
       }
 
@@ -158,23 +186,25 @@ const Notifikasi = () => {
         return [notification, ...previous].slice(0, 50);
       });
 
-      // Tampilkan titik merah muda pada ikon lonceng
       setHasNewNotification(true);
     };
 
     // ---------------------------------------------------
-    // SOCKET CONNECT
+    // SOCKET.IO BERHASIL TERHUBUNG
     // ---------------------------------------------------
 
     const handleConnect = () => {
       console.log('✅ Socket.IO Notifikasi terhubung');
+      console.log('Socket ID:', socket.id);
 
       // Meminta status MQTT terbaru dari backend
       socket.emit('request_mqtt_status');
+
+      console.log('📡 Meminta status MQTT terbaru dari backend');
     };
 
     // ---------------------------------------------------
-    // SOCKET DISCONNECT
+    // SOCKET.IO TERPUTUS
     // ---------------------------------------------------
 
     const handleDisconnect = (reason) => {
@@ -185,16 +215,40 @@ const Notifikasi = () => {
     };
 
     // ---------------------------------------------------
-    // SOCKET EVENT LISTENER
+    // SOCKET.IO GAGAL TERHUBUNG
+    // ---------------------------------------------------
+
+    const handleConnectError = (error) => {
+      console.error(
+        '❌ Socket.IO gagal terhubung:',
+        error.message
+      );
+    };
+
+    // ---------------------------------------------------
+    // SOCKET.IO MENCOBA TERHUBUNG KEMBALI
+    // ---------------------------------------------------
+
+    const handleReconnectAttempt = (attempt) => {
+      console.log(
+        '🔄 Socket.IO mencoba terhubung kembali:',
+        attempt
+      );
+    };
+
+    // ---------------------------------------------------
+    // DAFTARKAN EVENT LISTENER
     // ---------------------------------------------------
 
     socket.on('mqtt_status', handleMqttStatus);
     socket.on('notification', handleNotification);
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
+    socket.on('connect_error', handleConnectError);
+    socket.io.on('reconnect_attempt', handleReconnectAttempt);
 
     // ---------------------------------------------------
-    // CLEANUP SOCKET
+    // CLEANUP SOCKET.IO
     // ---------------------------------------------------
 
     return () => {
@@ -202,8 +256,12 @@ const Notifikasi = () => {
       socket.off('notification', handleNotification);
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
+      socket.off('connect_error', handleConnectError);
+      socket.io.off('reconnect_attempt', handleReconnectAttempt);
 
       socket.disconnect();
+
+      console.log('Socket.IO Notifikasi dibersihkan');
     };
   }, []);
 
@@ -212,7 +270,9 @@ const Notifikasi = () => {
   // =====================================================
 
   const formatDate = (timestamp) => {
-    if (!timestamp) return '-';
+    if (!timestamp) {
+      return '-';
+    }
 
     const date = new Date(timestamp);
 
@@ -242,11 +302,7 @@ const Notifikasi = () => {
       {/* HEADER */}
 
       <Header
-        mqttStatus={
-          mqttConnected
-            ? 'connected'
-            : mqttStatus
-        }
+        mqttStatus={mqttStatus}
         showNotificationBell={true}
         hasNewNotification={hasNewNotification}
         onNotificationBellClick={() => {
