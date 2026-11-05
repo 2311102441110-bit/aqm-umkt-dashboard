@@ -1,3 +1,4 @@
+
 const mqtt = require('mqtt');
 const supabase = require('./supabase');
 const { sendAlert } = require('./telegram');
@@ -42,6 +43,8 @@ const LOCATION_REFRESH_INTERVAL = 3000;
 
 // ==========================================
 // ANTRIAN SENSOR_CURRENT
+// Hanya menyimpan pembaruan terbaru
+// yang belum diproses.
 // ==========================================
 let currentWriteInProgress = false;
 let pendingCurrentWrite = null;
@@ -131,12 +134,11 @@ const refreshActiveObservationLocation = async () => {
                 error.message
             );
 
+            // Pertahankan cache sebelumnya jika query gagal.
             return activeLocationCache;
         }
 
         activeLocationCache = data;
-        console.log('Lokasi pengamatan aktif:', data.location_name);
-
         return activeLocationCache;
     })();
 
@@ -200,6 +202,8 @@ const processSensorCurrentQueue = async () => {
     try {
         while (pendingCurrentWrite) {
             const payload = pendingCurrentWrite;
+
+            // Ambil data terbaru yang menunggu.
             pendingCurrentWrite = null;
 
             const { error } = await supabase
@@ -227,6 +231,7 @@ const processSensorCurrentQueue = async () => {
     } finally {
         currentWriteInProgress = false;
 
+        // Periksa kembali jika ada data masuk saat proses berakhir.
         if (pendingCurrentWrite) {
             processSensorCurrentQueue();
         }
@@ -313,19 +318,12 @@ const initMqtt = (io) => {
     // PESAN MQTT MASUK
     // ======================================
     mqttClient.on('message', async (topic, message) => {
-        // LOG INI UNTUK MEMASTIKAN MQTT MENERIMA DATA ESP8266.
-        console.log('');
-        console.log('========================================');
-        console.log('PESAN MQTT DITERIMA');
-        console.log('Topic:', topic);
-        console.log('Payload:', message.toString());
-        console.log('========================================');
-
         try {
             const data = JSON.parse(message.toString());
 
             let location = activeLocationCache;
 
+            // Jika cache belum tersedia, ambil lokasi terlebih dahulu.
             if (!location) {
                 location = await refreshActiveObservationLocation();
             }
@@ -369,6 +367,7 @@ const handleSensorData = async (deviceId, data, location) => {
     } = data;
 
     const { time, minuteKey } = getCurrentTime();
+
     const session = getCurrentSession();
 
     if (!location) {
@@ -402,13 +401,7 @@ const handleSensorData = async (deviceId, data, location) => {
     // Tidak menunggu Supabase.
     // ======================================
     if (ioInstance) {
-        console.log('MENGIRIM DATA SENSOR KE SOCKET.IO:', sensor);
-
         ioInstance.emit('sensor_data', sensor);
-
-        console.log('DATA SENSOR BERHASIL DIKIRIM KE SOCKET.IO.');
-    } else {
-        console.error('Socket.IO belum tersedia. Data tidak terkirim ke dashboard.');
     }
 
     // ======================================
@@ -515,6 +508,7 @@ const handleSensorData = async (deviceId, data, location) => {
         return;
     }
 
+    // Tandai sebelum insert untuk mencegah insert ganda.
     recordingMinute[deviceId] = recordKey;
 
     // ======================================
@@ -591,6 +585,7 @@ const checkSessionEnd = () => {
 
         if (!sensor) continue;
 
+        // Cegah laporan ganda ketika proses Telegram berlangsung.
         notifyingSession.add(sessionKey);
 
         sendSessionReport(
@@ -603,7 +598,7 @@ const checkSessionEnd = () => {
 };
 
 // ==========================================
-// KIRIM LAPORAN TELEGRAM
+// KIRIM LAPORAN TELEGRAM DAN DASHBOARD
 // ==========================================
 const sendSessionReport = async (
     deviceId,
@@ -619,9 +614,13 @@ const sendSessionReport = async (
             observationSession.location_code !==
                 sensor.observation_location_code
         ) {
+            console.log(
+                'Laporan tidak dikirim karena lokasi sesi tidak sesuai.'
+            );
             return;
         }
 
+        // Validasi DHT22.
         if (!isDhtValid(sensor.temperature, sensor.humidity)) {
             console.log(
                 'Laporan Telegram tidak dikirim karena DHT22 tidak valid.'
@@ -667,11 +666,18 @@ const sendSessionReport = async (
             `💾 Interval perekaman: 1 menit\n` +
             `📱 Notifikasi: akhir sesi`;
 
+        // ==================================
+        // 1. KIRIM LAPORAN KE TELEGRAM
+        // ==================================
         await sendAlert(telegramMessage);
 
-    // ==================================
-    // NOTIFIKASI DASHBOARD + SUPABASE
-    // ==================================
+        console.log(
+            'Telegram laporan sesi berhasil dikirim.'
+        );
+
+        // ==================================
+        // 2. SIAPKAN NOTIFIKASI DASHBOARD
+        // ==================================
         const notificationObject = {
             id: `${Date.now()}-${deviceId}`,
             title: 'Laporan Kualitas Udara',
@@ -689,33 +695,38 @@ const sendSessionReport = async (
             timestamp: new Date().toISOString()
         };
 
-            // Simpan riwayat notifikasi ke Supabase.
-            const { error: notificationError } = await supabase
+        // ==================================
+        // 3. SIMPAN NOTIFIKASI KE SUPABASE
+        // ==================================
+        const { error: notificationError } = await supabase
             .from('alerts')
             .insert([notificationObject]);
 
-            if (notificationError) {
+        if (notificationError) {
             console.error(
                 'Gagal menyimpan notifikasi ke Supabase:',
                 notificationError.message
             );
-            } else {
+        } else {
             console.log(
                 'Notifikasi berhasil disimpan ke Supabase.'
             );
         }
 
-            // Kirim notifikasi realtime ke semua dashboard yang terhubung.
-            if (ioInstance) {
+        // ==================================
+        // 4. KIRIM NOTIFIKASI REALTIME
+        // ==================================
+        if (ioInstance) {
             ioInstance.emit('notification', notificationObject);
 
             console.log(
-            'Notifikasi berhasil dikirim ke dashboard melalui Socket.IO.'
+                'Notifikasi berhasil dikirim ke dashboard melalui Socket.IO.'
             );
         }
+
         console.log('');
         console.log('========================================');
-        console.log('TELEGRAM LAPORAN SESI TERKIRIM');
+        console.log('LAPORAN SESI SELESAI');
         console.log('Sesi   :', session.name);
         console.log('Lokasi :', locationName);
         console.log('Status :', currentStatus);
@@ -725,7 +736,7 @@ const sendSessionReport = async (
 
     } catch (error) {
         console.error(
-            'Gagal mengirim laporan Telegram:',
+            'Gagal memproses laporan sesi:',
             error.message
         );
     } finally {
