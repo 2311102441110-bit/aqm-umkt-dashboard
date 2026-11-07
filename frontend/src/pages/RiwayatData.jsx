@@ -109,34 +109,28 @@ const RiwayatData = () => {
 
 
             // =================================================
-            // FILTER TANGGAL
+            // FILTER TANGGAL - WITA (UTC+8)
             // =================================================
 
             if (selectedDate) {
-
-                const startDate =
-                    `${selectedDate}T00:00:00`;
-
-                const nextDate =
-                    new Date(
-                        `${selectedDate}T00:00:00`
-                    );
-
-                nextDate.setDate(
-                    nextDate.getDate() + 1
+                // Awal hari pukul 00:00 WITA
+                const startDate = new Date(
+                    `${selectedDate}T00:00:00+08:00`
                 );
 
-                const endDate =
-                    nextDate.toISOString();
+                // Akhir hari pukul 00:00 WITA hari berikutnya
+                const endDate = new Date(
+                    startDate.getTime() + 24 * 60 * 60 * 1000
+                );
 
                 query = query
                     .gte(
                         'timestamp',
-                        startDate
+                        startDate.toISOString()
                     )
                     .lt(
                         'timestamp',
-                        endDate
+                        endDate.toISOString()
                     );
             }
 
